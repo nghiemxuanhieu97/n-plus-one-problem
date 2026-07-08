@@ -1,0 +1,7 @@
+rootProject.name = 'n-plus-one-problem'
+
+include '01-join-fetch',
+        '02-entity-graph',
+        '03-dto-projection',
+        '04-batch-size',
+        '05-subselect-fetch'
