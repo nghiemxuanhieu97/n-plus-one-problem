@@ -19,18 +19,26 @@ public class DemoRunner implements CommandLineRunner {
     public void run(String... args) {
         log.info("");
         log.info("==================================================");
-        log.info("  Module 04: @BatchSize Solution");
-        log.info("  Author.books annotated with @BatchSize(size = 5)");
-        log.info("  No changes needed to Repository or Service code!");
+        log.info("  Module 04: @BatchSize Showcase");
+        log.info("  Demo 3 levels: application, class, attribute");
+        log.info("  Lazy loading stays lazy, but Hibernate batches IN queries");
         log.info("==================================================");
 
         authorService.demonstrateBatchSize();
+        authorService.demonstrateClassLevelBatchSize();
+        authorService.demonstrateApplicationLevelBatchSize();
+        authorService.demonstrateBatchPreloadTradeoff();
+        authorService.demonstratePaginationFriendlyAccess();
 
         log.info("");
         log.info("==================================================");
-        log.info("  Without @BatchSize: 6 queries (1 + 5 individual)");
-        log.info("  With @BatchSize(5): 2 queries (1 + 1 IN-batch)");
-        log.info("  Formula: 1 + ceil(N / batch_size)");
+        log.info("  KEY POINTS");
+        log.info("  - application.yml: global fallback batch size");
+        log.info("  - @BatchSize on entity class: batch entity proxies by id");
+        log.info("  - @BatchSize on association field: batch that lazy collection/association");
+        log.info("  - More specific @BatchSize overrides the global default for that target");
+        log.info("  - More pagination-friendly than collection JOIN FETCH");
+        log.info("  - Can preload extra data if you only need one collection");
         log.info("==================================================");
     }
 }
