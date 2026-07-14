@@ -36,4 +36,8 @@ public class Author {
     @OneToMany(mappedBy = "author", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @Builder.Default
     private Set<Award> awards = new LinkedHashSet<>();
+
+    @Lob
+    @Column(columnDefinition = "LONGTEXT")
+    private String biography;
 }

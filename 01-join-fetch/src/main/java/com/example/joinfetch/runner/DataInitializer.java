@@ -76,6 +76,7 @@ public class DataInitializer implements CommandLineRunner {
         Author author = Author.builder()
                 .name("Author " + authorIndex)
                 .country(country)
+                .biography("A".repeat(10000))
                 .build();
 
         for (int bookIndex = 1; bookIndex <= booksPerAuthor; bookIndex++) {

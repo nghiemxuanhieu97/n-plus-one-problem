@@ -1,23 +1,26 @@
-# Module 01: JOIN FETCH Playground
+# Module 01: JOIN FETCH Benchmark Playground
 
-This module is a Spring Boot + Spring Data JPA educational demo for understanding Hibernate `JOIN FETCH` behavior.
+This module is a Spring Boot + Spring Data JPA demo for observing Hibernate fetch behavior. It focuses on `LAZY` associations, N+1 queries, `JOIN FETCH`, pagination pitfalls, row explosion, and JVM/backend metrics collected during each benchmark request.
 
-It currently demonstrates:
+The module intentionally keeps JPA entities out of API responses. Service methods map entities to scenario-specific DTOs inside the transaction, then return `Response<T>` with metrics and a small preview of the result data.
 
-- N+1 queries with lazy collections.
-- Good `JOIN FETCH` usage for a to-one association.
-- Good but size-sensitive `JOIN FETCH` usage for one collection.
-- Bad `JOIN FETCH` usage with multiple collections, causing Cartesian product style row explosion.
-- Pagination behavior with normal lazy loading, to-one fetch join, collection fetch join, and safe two-step pagination.
-- Runtime observability data such as Hibernate statistics, heap usage, GC count, CPU time, and estimated joined rows.
+## What This Module Demonstrates
 
-OpenAPI UI, if Springdoc is enabled in the module build:
+- Baseline author loading without touching associations.
+- N+1 query behavior with lazy `books` and lazy `awards`.
+- Safe `JOIN FETCH` for a to-one association: `Author.country`.
+- Size-sensitive `JOIN FETCH` for one collection: `Author.books`.
+- Dangerous multiple-collection `JOIN FETCH`: `Author.books` + `Author.awards`.
+- Pagination with lazy loading, to-one fetch join, collection fetch join, and two-step pagination.
+- Runtime benchmark metrics: ORM query identifiers, SQL statements, prepared statement count, execution time, CPU time, thread allocation, GC count, and estimated database rows.
+
+OpenAPI UI:
 
 ```text
 http://localhost:8080/swagger-ui.html
 ```
 
-## Current Domain Model
+## Domain Model
 
 ```text
 Country (1) ------ (*) Author
@@ -25,15 +28,17 @@ Author  (1) ------ (*) Book
 Author  (1) ------ (*) Award
 ```
 
-Current entity relationships:
+Current relationship shape:
 
-- `Author.country`: `@ManyToOne(fetch = FetchType.LAZY)`
-- `Author.books`: `@OneToMany(fetch = FetchType.LAZY)` as `List<Book>`
-- `Author.awards`: `@OneToMany(fetch = FetchType.LAZY)` as `Set<Award>`
-- `Book.author`: `@ManyToOne(fetch = FetchType.LAZY)`
-- `Award.author`: `@ManyToOne(fetch = FetchType.LAZY)`
+| Entity field | Mapping |
+| --- | --- |
+| `Author.country` | `@ManyToOne(fetch = FetchType.LAZY)` |
+| `Author.books` | `@OneToMany(fetch = FetchType.LAZY)` as `List<Book>` |
+| `Author.awards` | `@OneToMany(fetch = FetchType.LAZY)` as `Set<Award>` |
+| `Book.author` | `@ManyToOne(fetch = FetchType.LAZY)` |
+| `Award.author` | `@ManyToOne(fetch = FetchType.LAZY)` |
 
-The module keeps relationships `LAZY` by default. It does not solve N+1 by changing relationships to `EAGER`.
+The demo does not solve N+1 by switching relationships to `EAGER`. Lazy loading remains part of the lesson.
 
 ## Seed Data
 
@@ -46,6 +51,7 @@ Default dataset:
 500 authors
 20 books per author
 10 awards per author
+10,000-character biography per author
 ```
 
 Large dataset flag:
@@ -55,25 +61,32 @@ demo:
   large-dataset: true
 ```
 
-When enabled:
+Large dataset:
 
 ```text
 50 countries
-5000 authors
+5,000 authors
 50 books per author
 20 awards per author
+10,000-character biography per author
 ```
 
-The large dataset is intended for stressing memory, CPU, GC, and row explosion behavior.
+The large dataset is intended for stressing memory, CPU, GC, row multiplication, and failure modes.
 
 ## Runtime Configuration
 
-Important `application.yml` settings:
+Important settings:
 
 ```yaml
 spring:
+  datasource:
+    url: jdbc:p6spy:mysql://127.0.0.1:3306/assessment_service?...
+    driver-class-name: com.p6spy.engine.spy.P6SpyDriver
   jpa:
     open-in-view: false
+    database-platform: org.hibernate.dialect.MySQLDialect
+    hibernate:
+      ddl-auto: create-drop
     properties:
       hibernate:
         format_sql: true
@@ -84,10 +97,25 @@ spring:
 
 Meaning:
 
-- `open-in-view: false`: lazy loading must happen inside service transactions, not accidentally in the web layer.
-- `format_sql: true`: SQL logs are easier to read.
-- `generate_statistics: true`: Hibernate statistics are available in responses.
-- `fail_on_pagination_over_collection_fetch: false`: Hibernate is allowed to demonstrate the bad in-memory pagination behavior instead of failing fast.
+- `open-in-view: false`: lazy loading must happen inside service transactions, not during Jackson serialization.
+- `generate_statistics: true`: Hibernate statistics are available to `BenchmarkAspect`.
+- `fail_on_pagination_over_collection_fetch: false`: Hibernate demonstrates in-memory pagination instead of failing fast.
+- P6Spy is used to collect real SQL statements with bind values through `CollectingP6SpyLogger`.
+
+`build.gradle` also constrains the demo runtime:
+
+```groovy
+tasks.named("bootRun") {
+    jvmArgs = [
+            "-Xms256m",
+            "-Xmx512m",
+            "-XX:MaxMetaspaceSize=256m",
+            "-XX:ActiveProcessorCount=2"
+    ]
+}
+```
+
+These limits are intentional. They make the Cartesian-product endpoint easier to understand because the problematic query can exhaust memory instead of merely returning a statistic.
 
 ## Run
 
@@ -103,115 +131,165 @@ Windows PowerShell:
 .\gradlew.bat :01-join-fetch:bootRun
 ```
 
-## Active Controller
+The app expects MySQL by default. Override `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` if needed.
 
-The active controller is:
+## Active Controller
 
 ```text
 com.example.joinfetch.controller.AuthorController
-Base path: /demo
+Base path: /demos/authors
 ```
 
-There is currently no active `BenchmarkController` file in this module. Benchmark-style information is returned inside the existing `/demo` responses through the nested `benchmark` field.
+Controller tags:
+
+- `Baseline`
+- `JOIN FETCH`
+- `Pagination`
 
 ## Active APIs
 
-| Endpoint | Response DTO | Scenario | Good/Bad |
-| --- | --- | --- | --- |
-| `GET /demo/n-plus-one/book` | `PerformanceResponse` | Load authors, then access lazy books | Bad |
-| `GET /demo/n-plus-one/book&award` | `PerformanceResponse` | Load authors, then access lazy books and awards | Bad |
-| `GET /demo/join-fetch/to-one` | `PerformanceResponse` | `JOIN FETCH` `Author.country` | Good |
-| `GET /demo/join-fetch/books` | `PerformanceResponse` | `JOIN FETCH` one collection, `Author.books` | Good if size is controlled |
-| `GET /demo/join-fetch/cartesian` | `CartesianProductDemoResponse` | `JOIN FETCH` books and awards together | Bad |
-| `GET /demo/pagination/n-plus-one?page=0&size=10` | `PaginationDemoResponse` | Page authors normally, then touch books | Bad (N+1) |
-| `GET /demo/pagination/to-one?page=0&size=10` | `PaginationDemoResponse` | Pageable with to-one fetch join | Good |
-| `GET /demo/pagination/books?page=0&size=10` | `PaginationDemoResponse` | Pageable with collection fetch join | Bad |
-| `GET /demo/pagination/safe?page=0&size=10` | `PaginationDemoResponse` | Page IDs first, then fetch graph | Recommended |
+| Endpoint | Method | Scenario | Result DTO | Notes |
+| --- | --- | --- | --- | --- |
+| `GET /demos/authors/baseline` | `getBaselineAuthors` | `AUTHORS_ONLY` | `AuthorBasicDto` | Loads authors only; does not touch lazy associations. |
+| `GET /demos/authors/n-plus-one/book` | `getAuthorsWithNPlusOneBooks` | `N_PLUS_ONE_BOOK` | `AuthorBooksDto` | Intentionally maps `books` inside the transaction to trigger lazy collection queries. |
+| `GET /demos/authors/n-plus-one/book-and-award` | `getAuthorsWithNPlusOneBooksAndAwards` | `N_PLUS_ONE_BOOK_AWARD` | `AuthorBooksAwardsDto` | Intentionally maps both `books` and `awards`. |
+| `GET /demos/authors/join-fetch/country` | `getAuthorsWithJoinFetchedCountry` | `JOIN_FETCH_TO_ONE` | `AuthorCountryDto` | Fetches `country`; response has no `books` or `awards`. |
+| `GET /demos/authors/join-fetch/book` | `getAuthorsWithJoinFetchedBooks` | `JOIN_FETCH_BOOKS` | `AuthorBooksDto` | Fetches `books`; response has no `country` or `awards`. |
+| `GET /demos/authors/join-fetch/book-and-award` | `getAuthorsWithJoinFetchedBooksAndAwards` | `JOIN_FETCH_CARTESIAN` | `AuthorBooksAwardsDto` | Demonstrates row explosion and may fail with OOM under resource limits. |
+| `GET /demos/authors/pagination/n-plus-one/book?page=0&size=10` | `demoPaginationNPlusOne` | `PAGINATION_N_PLUS_ONE_BOOK` | `AuthorBooksDto` | Paged authors, then lazy books. |
+| `GET /demos/authors/pagination/join-fetch/country?page=0&size=10` | `demoPaginationToOne` | `PAGINATION_TO_ONE` | `AuthorCountryDto` | Safe to-one fetch join pagination. |
+| `GET /demos/authors/pagination/join-fetch/book?page=0&size=10` | `demoPaginationBooksBad` | `PAGINATION_COLLECTION_JOIN_FETCH` | `AuthorBooksDto` | Collection fetch join with pageable; may paginate in memory. |
+| `GET /demos/authors/pagination/two-step/book?page=0&size=10` | `demoSafePagination` | `SAFE_PAGINATION_TWO_STEP` | `AuthorBooksDto` | Recommended two-step pagination for books. |
 
-These endpoints are present in `AuthorController` but currently commented out, so they are not active:
+## Response Contract
 
-- `GET /demo/batch-fetch`
-- `GET /demo/performance/memory-explosion`
-- `GET /demo/production/recommendations`
+All benchmark APIs return `com.example.joinfetch.dto.record.Response<T>`:
 
-## API Details
+```java
+public record Response<T>(
+        String scenario,
+        long ormQueryExecutionCount,
+        List<String> ormQueries,
+        long sqlStatementCount,
+        long preparedStatementCount,
+        List<String> sqlStatements,
+        long estimatedDatabaseRows,
+        double executionTimeMs,
+        double cpuTimeMs,
+        double threadAllocatedMb,
+        long gcCountDelta,
+        T result
+) {}
+```
 
-### 1. N+1: Books
+Metric notes:
+
+- `scenario`: value from `@BenchmarkScenario` on the service method.
+- `ormQueryExecutionCount`: `Hibernate Statistics#getQueryExecutionCount()`.
+- `ormQueries`: query identifiers from `Hibernate Statistics#getQueries()`; these are not guaranteed to be JPQL strings in every Hibernate path.
+- `sqlStatementCount`: number of SQL statements collected by P6Spy for this benchmark request.
+- `preparedStatementCount`: `Hibernate Statistics#getPrepareStatementCount()`.
+- `sqlStatements`: preview of collected SQL statements, limited to the first 20 statements to keep the JSON readable.
+- `estimatedDatabaseRows`: scenario-specific estimate, not a JDBC `ResultSet` row counter.
+- `executionTimeMs`: wall-clock time measured by `BenchmarkAspect`.
+- `cpuTimeMs`: current request thread CPU time when supported by the JVM.
+- `threadAllocatedMb`: allocated bytes by the request thread converted to MB when supported; `-1` means unavailable.
+- `gcCountDelta`: JVM GC collection-count delta during the request.
+- `result`: scenario-specific DTO data preview.
+
+The service currently limits `result` to the first 5 DTOs for full-list scenarios. Metrics such as `estimatedDatabaseRows`, query counts, CPU, allocation, and GC still represent the full benchmark work done before the preview is returned.
+
+Example shape for `GET /demos/authors/join-fetch/book`:
+
+```json
+{
+  "scenario": "JOIN_FETCH_BOOKS",
+  "ormQueryExecutionCount": 1,
+  "ormQueries": [
+    "select distinct a from Author a join fetch a.books order by a.id"
+  ],
+  "sqlStatementCount": 1,
+  "preparedStatementCount": 1,
+  "sqlStatements": [
+    "select ... from authors ... join books ..."
+  ],
+  "estimatedDatabaseRows": 10000,
+  "executionTimeMs": 211.4,
+  "cpuTimeMs": 156.2,
+  "threadAllocatedMb": 18.7,
+  "gcCountDelta": 0,
+  "result": [
+    {
+      "id": 1,
+      "name": "Author 1",
+      "books": [
+        {
+          "id": 1,
+          "title": "Author 1 - Book 1",
+          "publishYear": 1981
+        }
+      ]
+    }
+  ]
+}
+```
+
+This response intentionally has no `country`, no `awards`, no Hibernate proxy object, no persistence collection type, and no `Book -> Author` back-reference.
+
+## Result DTOs
+
+| DTO | Fields | Used by |
+| --- | --- | --- |
+| `AuthorBasicDto` | `id`, `name` | baseline authors only |
+| `CountryDto` | `id`, `name`, `location`, `region` | nested inside `AuthorCountryDto` |
+| `BookDto` | `id`, `title`, `publishYear` | nested inside `AuthorBooksDto`, `AuthorBooksAwardsDto` |
+| `AwardDto` | `id`, `name` | nested inside `AuthorBooksAwardsDto` |
+| `AuthorCountryDto` | `id`, `name`, `country` | country fetch scenarios |
+| `AuthorBooksDto` | `id`, `name`, `books` | books fetch scenarios |
+| `AuthorBooksAwardsDto` | `id`, `name`, `books`, `awards` | books + awards scenarios |
+
+The DTO mappers deliberately access only the association needed by the scenario. For Cartesian joins, duplicate child DTOs are de-duplicated by child ID for readable JSON, but `estimatedDatabaseRows` still uses the raw row explosion formula.
+
+## Scenario Details
+
+### Baseline Authors Only
 
 ```http
-GET /demo/n-plus-one/book
+GET /demos/authors/baseline
 ```
 
-Service method:
+Loads authors through `findAll()` and maps only `id` and `name`. No lazy association is accessed by the mapper.
 
-```text
-AuthorService.demoNPlusOneBook()
-```
-
-Main JPQL:
-
-```jpql
-select a
-from Author a
-```
-
-Backend flow:
-
-1. Load a page/list of authors through `authorRepository.findAll()`.
-2. Access `author.getBooks()` inside the service.
-3. Hibernate initializes the lazy `books` collection.
-
-Why this is bad:
-
-- The first query looks cheap because it only loads authors.
-- The real cost appears later when lazy collections are accessed.
-- Query count and collection fetch count can grow with the number of authors.
-
-### 2. N+1: Books And Awards
+### N+1: Books
 
 ```http
-GET /demo/n-plus-one/book&award
+GET /demos/authors/n-plus-one/book
 ```
 
-Service method:
+Flow:
 
-```text
-AuthorService.demoNPlusOneBookAward()
-```
+1. Load all authors.
+2. Map `AuthorBooksDto` inside the transaction.
+3. Mapping calls `author.getBooks()` intentionally.
+4. Hibernate initializes lazy books collections inside the benchmark.
 
-Main JPQL:
+This endpoint is intentionally bad so the benchmark can show many SQL statements.
 
-```jpql
-select a
-from Author a
-```
-
-Backend flow:
-
-1. Load authors.
-2. Access `author.getBooks()`.
-3. Access `author.getAwards()`.
-4. Hibernate initializes two lazy collections.
-
-Why this is worse than books only:
-
-- Two lazy collections may need initialization.
-- More entities and collections are hydrated.
-- Heap, CPU, and GC pressure can increase.
-
-### 3. JOIN FETCH To-One
+### N+1: Books And Awards
 
 ```http
-GET /demo/join-fetch/to-one
+GET /demos/authors/n-plus-one/book-and-award
 ```
 
-Repository method:
+Same baseline as books, but mapping touches both `author.getBooks()` and `author.getAwards()`. This can produce many more lazy collection SQL statements.
 
-```text
-AuthorRepository.findAllWithCountryJoinFetch()
+### JOIN FETCH Country
+
+```http
+GET /demos/authors/join-fetch/country
 ```
 
-JPQL:
+Repository query:
 
 ```jpql
 select a
@@ -220,41 +298,15 @@ join fetch a.country
 order by a.id
 ```
 
-Expected SQL shape:
+This is safe because `country` is to-one. It avoids lazy country queries without multiplying author rows.
 
-```sql
-select a.*, c.*
-from authors a
-join countries c on c.id = a.country_id
-order by a.id;
-```
-
-Why this is good:
-
-- `Country` is to-one.
-- One author still maps to one SQL row.
-- It avoids lazy country queries without multiplying parent rows.
-
-Backend artifact impact:
-
-- Memory: usually stable.
-- CPU: low extra cost.
-- GC: usually low.
-- SQL rows: approximately equal to author count.
-
-### 4. JOIN FETCH One Collection
+### JOIN FETCH Books
 
 ```http
-GET /demo/join-fetch/books
+GET /demos/authors/join-fetch/book
 ```
 
-Repository method:
-
-```text
-AuthorRepository.findAllWithBooksJoinFetch()
-```
-
-JPQL:
+Repository query:
 
 ```jpql
 select distinct a
@@ -263,20 +315,7 @@ join fetch a.books
 order by a.id
 ```
 
-Expected SQL shape:
-
-```sql
-select distinct a.*, b.*
-from authors a
-join books b on b.author_id = a.id
-order by a.id;
-```
-
-Why this is good, but size-sensitive:
-
-- It removes N+1 for books.
-- It uses one main query.
-- But SQL rows become `authors x booksPerAuthor`.
+This removes the books N+1 problem, but the SQL result still contains approximately one row per author-book pair.
 
 Default dataset estimate:
 
@@ -284,26 +323,13 @@ Default dataset estimate:
 500 authors x 20 books = 10,000 joined rows
 ```
 
-Backend artifact impact:
-
-- Memory: grows with joined rows and hydrated books.
-- CPU: grows with result-set processing and de-duplication.
-- GC: can increase for larger datasets.
-- SQL rows: much larger than author count.
-
-### 5. Cartesian Product: Books And Awards
+### Cartesian Product: Books And Awards
 
 ```http
-GET /demo/join-fetch/cartesian
+GET /demos/authors/join-fetch/book-and-award
 ```
 
-Repository method:
-
-```text
-AuthorRepository.findAllWithBooksAndAwardsJoinFetch()
-```
-
-JPQL:
+Repository query:
 
 ```jpql
 select distinct a
@@ -313,133 +339,53 @@ join fetch a.awards
 order by a.id
 ```
 
-Expected SQL shape:
-
-```sql
-select distinct a.*, b.*, aw.*
-from authors a
-join books b on b.author_id = a.id
-join awards aw on aw.author_id = a.id
-order by a.id;
-```
-
-Why it is dangerous:
-
-- `books` is to-many.
-- `awards` is also to-many.
-- SQL combines every book row with every award row for the same author.
+This is the dangerous endpoint.
 
 Formula:
 
 ```text
-estimated rows = authors x booksPerAuthor x awardsPerAuthor
+estimated rows = sum(bookCount x awardCount) per author
 ```
 
-Default dataset:
+Default dataset estimate:
 
 ```text
 500 authors x 20 books x 10 awards = 100,000 joined rows
 ```
 
-Large dataset:
+Large dataset estimate:
 
 ```text
-5000 authors x 50 books x 20 awards = 5,000,000 joined rows
+5,000 authors x 50 books x 20 awards = 5,000,000 joined rows
 ```
 
-Why query count can be misleading:
+Because `bootRun` limits heap to `-Xmx512m` and each author contains a large biography, this endpoint may fail with `OutOfMemoryError` before a normal benchmark response can be returned. That failure is the point of the demo: one SQL statement can still be catastrophic when it returns a multiplied result set that Hibernate must hydrate and assemble.
 
-- The main query count may be low.
-- The amount of data returned by that one query can be huge.
-- Hibernate still has to hydrate rows, resolve identity, assemble collections, and de-duplicate parent authors.
+If this endpoint fails, do not read it as missing statistics. Read it as evidence that the Cartesian fetch shape exceeded the configured JVM resource budget.
 
-Backend artifact impact:
-
-- Memory: can spike due to large result sets and hydrated object graphs.
-- CPU: can spike due to row processing and de-duplication.
-- GC: can increase because many temporary objects are created during hydration.
-- Network/database transfer: can explode because SQL rows are multiplied.
-- Response time: can become worse even with fewer SQL statements.
-
-### 6. Pagination N+1 Baseline
+### Pagination N+1 Books
 
 ```http
-GET /demo/pagination/n-plus-one?page=0&size=10
+GET /demos/authors/pagination/n-plus-one/book?page=0&size=10
 ```
 
-Service method:
+Pages authors first, then maps `AuthorBooksDto`, intentionally touching lazy books inside the transaction. The N+1 effect is bounded by page size but still visible.
 
-```text
-AuthorService.demoPaginationNPlusOne(page, size)
-```
-
-Main query:
-
-```jpql
-select a
-from Author a
-```
-
-Backend flow:
-
-1. Page authors with `findAll(PageRequest.of(page, size))`.
-2. Touch `author.getBooks()` for authors in the page.
-
-Purpose:
-
-This is a pagination baseline showing what happens when a paged result still triggers lazy collection access.
-
-### 7. Pagination With To-One JOIN FETCH
+### Pagination JOIN FETCH Country
 
 ```http
-GET /demo/pagination/to-one?page=0&size=10
+GET /demos/authors/pagination/join-fetch/country?page=0&size=10
 ```
 
-Repository method:
+Safe because the fetch join is to-one. SQL pagination remains stable.
 
-```text
-AuthorRepository.findPageWithCountryJoinFetch(Pageable pageable)
-```
-
-JPQL:
-
-```jpql
-select a
-from Author a
-join fetch a.country
-order by a.id
-```
-
-Why this is good:
-
-- `Country` is to-one.
-- Rows are not multiplied.
-- SQL pagination remains correct.
-
-### 8. Pagination With Collection JOIN FETCH
+### Pagination JOIN FETCH Books
 
 ```http
-GET /demo/pagination/books?page=0&size=10
+GET /demos/authors/pagination/join-fetch/book?page=0&size=10
 ```
 
-Repository method:
-
-```text
-AuthorRepository.findPageWithBooksJoinFetch(Pageable pageable)
-```
-
-JPQL:
-
-```jpql
-select distinct a
-from Author a
-join fetch a.books
-order by a.id
-```
-
-Why this is bad:
-
-SQL pagination works on rows, but this query returns author-book rows. Hibernate may need to fetch all joined rows, de-duplicate authors, and paginate in memory.
+Collection fetch join with `Pageable` is intentionally bad. Hibernate can fetch a much larger joined result, de-duplicate authors, and then apply pagination in memory.
 
 Warning to look for:
 
@@ -447,24 +393,10 @@ Warning to look for:
 HHH90003004: firstResult/maxResults specified with collection fetch; applying in memory
 ```
 
-Backend artifact impact:
-
-- Memory: can grow with all joined rows, not page size.
-- CPU: de-duplication and in-memory pagination cost.
-- GC: can increase with larger result sets.
-- Response time: can degrade sharply on large data.
-
-### 9. Safe Pagination
+### Safe Two-Step Pagination For Books
 
 ```http
-GET /demo/pagination/safe?page=0&size=10
-```
-
-Repository methods:
-
-```text
-AuthorRepository.findAuthorIds(Pageable pageable)
-AuthorRepository.findAuthorsWithBooksByIds(List<Long> ids)
+GET /demos/authors/pagination/two-step/book?page=0&size=10
 ```
 
 Step 1:
@@ -480,227 +412,30 @@ Step 2:
 ```jpql
 select distinct a
 from Author a
-join fetch a.country
 join fetch a.books
 where a.id in :ids
 order by a.id
 ```
 
-Why this is safer:
+This keeps SQL row volume bounded by the requested page of author IDs.
 
-- Pagination happens on author ids first.
-- Collection fetch is limited to the selected page.
-- The result set is bounded by `page size x books per author`.
+## How To Read Results
 
-## Response DTOs
+A lower SQL statement count is not automatically better. Compare it with:
 
-### PerformanceResponse
-
-Returned by:
-
-- `/demo/n-plus-one/book`
-- `/demo/n-plus-one/book&award`
-- `/demo/join-fetch/to-one`
-- `/demo/join-fetch/books`
-
-Fields:
-
-| Field | Meaning |
-| --- | --- |
-| `title` | Human-readable scenario name. |
-| `scenarioType` | Category such as `GOOD`, `BAD`, or `GOOD WHEN RESULT SIZE IS CONTROLLED`. |
-| `jpql` | Main JPQL used by the scenario. |
-| `expectedSql` | Simplified SQL shape expected from Hibernate. |
-| `executionTimeMs` | Wall-clock time measured by the service. Should match `benchmark.executionTimeMs`. |
-| `totalAuthors` | Number of authors returned or involved in the scenario. |
-| `totalBooksLoaded` | Number of books loaded/accessed by the service. |
-| `totalAwardsLoaded` | Number of awards loaded/accessed by the service. |
-| `generatedRowsEstimate` | Estimated or counted SQL row volume for the scenario. |
-| `statistics` | Hibernate statistics snapshot. See `StatisticsResponse`. |
-| `benchmark` | JVM/backend artifact metrics. See `BenchmarkResponse`. |
-| `notes` | Educational explanation and recommendation. |
-| `comparisonTimingsMs` | Optional timing map for scenarios that compare multiple approaches. Currently usually empty unless comparison code is active. |
-
-### PaginationDemoResponse
-
-Returned by:
-
-- `/demo/pagination/n-plus-one`
-- `/demo/pagination/to-one`
-- `/demo/pagination/books`
-- `/demo/pagination/safe`
-
-Fields:
-
-| Field | Meaning |
-| --- | --- |
-| `title` | Human-readable scenario name. |
-| `jpql` | Main JPQL or multi-step JPQL description. |
-| `expectedSql` | Simplified SQL behavior. |
-| `page` | Requested page number. |
-| `size` | Requested page size. |
-| `recordsReturned` | Number of author records returned in the response scenario. |
-| `executionTimeMs` | Wall-clock time measured by the service. |
-| `idsQueryTimeMs` | Time spent fetching author ids in safe pagination. Null for single-step scenarios. |
-| `fetchQueryTimeMs` | Time spent fetching associations in safe pagination. Null for single-step scenarios. |
-| `totalAuthors` | Total authors according to the page/count result. |
-| `totalBooksLoaded` | Books loaded/accessed in the scenario. |
-| `totalAwardsLoaded` | Awards loaded/accessed in the scenario. |
-| `generatedRowsEstimate` | Estimated or counted SQL row volume. |
-| `statistics` | Hibernate statistics snapshot. |
-| `benchmark` | Heap, GC, CPU, query, and hydration metrics. |
-| `notes` | Educational explanation and recommendation. |
-
-### CartesianProductDemoResponse
-
-Returned by:
-
-- `/demo/join-fetch/cartesian`
-
-Fields:
-
-| Field | Meaning |
-| --- | --- |
-| `title` | Scenario name. |
-| `jpql` | JPQL with multiple collection fetch joins. |
-| `expectedSql` | Simplified SQL join shape. |
-| `executionTimeMs` | Wall-clock time measured by the service. |
-| `totalAuthors` | Authors returned after Hibernate de-duplicates parent entities. |
-| `totalBooksLoaded` | Books loaded/accessed. |
-| `totalAwardsLoaded` | Awards loaded/accessed. |
-| `generatedRowsEstimate` | Counted joined row volume: authors joined to books joined to awards. |
-| `rowsPerAuthorEstimate` | `generatedRowsEstimate / totalAuthors`. |
-| `statistics` | Hibernate statistics snapshot. |
-| `benchmark` | Heap, GC, CPU, query, and hydration metrics. |
-| `notes` | Explanation of why the scenario is dangerous. |
-
-### StatisticsResponse
-
-Nested inside main responses as `statistics`.
-
-| Field | Meaning |
-| --- | --- |
-| `entityLoadCount` | Number of entities loaded by Hibernate in the measured session/statistics window. |
-| `collectionFetchCount` | Number of collections fetched by Hibernate. This is especially useful for lazy collection access. |
-| `queryExecutionCount` | Hibernate query execution count. This is not always the same as raw JDBC statement count. |
-| `prepareStatementCount` | Number of prepared SQL statements. This is usually the closest value to SQL statement count. |
-
-### BenchmarkResponse
-
-Nested inside main responses as `benchmark`.
-
-| Field | Meaning |
-| --- | --- |
-| `strategy` | Internal strategy name for the scenario, such as `JOIN_FETCH_BOOKS` or `JOIN_FETCH_CARTESIAN`. |
-| `executionTimeMs` | Wall-clock time for the measured block. |
-| `heapBeforeMB` | Used heap before the measured block. |
-| `heapAfterMB` | Used heap after the measured block. |
-| `heapDeltaMB` | `heapAfterMB - heapBeforeMB`. Positive means heap usage increased during the request. |
-| `gcBefore` | Total JVM GC collection count before execution. |
-| `gcAfter` | Total JVM GC collection count after execution. |
-| `gcDelta` | `gcAfter - gcBefore`. If positive, GC happened during the request. |
-| `cpuTimeMs` | Current thread CPU time consumed during the measured block, when supported by the JVM. |
-| `queryCount` | Hibernate `prepareStatementCount`, used as a practical SQL statement count. |
-| `entityLoadCount` | Hibernate entity load count. |
-| `collectionLoadCount` | Hibernate collection load count. |
-| `authorsReturned` | Number of author objects returned/involved in the scenario. |
-| `estimatedCartesianRows` | Estimated row volume. For Cartesian scenarios this is `authors x books x awards`. |
-| `jdbcRowCount` | Currently set to the same value as `estimatedCartesianRows` in `AuthorService` benchmark helpers. |
-
-### Response Wrapper
-
-`Response.java` exists as a generic wrapper:
-
-```java
-public record Response(
-    StatisticsResponse statisticsResponse,
-    PerformanceResponse performanceResponse,
-    BenchmarkResponse benchmarkResponse
-) {}
-```
-
-The active controller methods currently return specific DTOs directly, not this wrapper.
-
-## Backend Artifact Comparison Tables
-
-Use these tables after running the endpoints. Fill the measured values from the response JSON.
-### Best vs Worst: General Comparison
-
-| Scenario                                        | Endpoint                                          | Query Count | Estimated Rows | Heap Delta MB | GC Delta | CPU Time MS | Execution Time MS | Notes                                                                                                                   |
-| ----------------------------------------------- | ------------------------------------------------- | ----------: | -------------: | ------------: | -------: | ----------: | ----------------: | ----------------------------------------------------------------------------------------------------------------------- |
-| Pagination N+1: Authors then lazy Books         | `/demo/pagination/n-plus-one/book?page=0&size=10` |          12 |            210 |          6.01 |        0 |         140 |               202 | Loads 10 Authors, then executes 10 lazy Books queries. With the Page count query, the total is 12 statements.           |
-| N+1: Books                                      | `/demo/n-plus-one/book`                           |         501 |         10,500 |         15.81 |        0 |         453 |               883 | Bad: one Author query followed by 500 lazy Books queries.                                                               |
-| N+1: Books and Awards                           | `/demo/n-plus-one/book&award`                     |       1,001 |         15,500 |          6.59 |        1 |         812 |             1,430 | Worst query-count case: one Author query, 500 Books queries, and 500 Awards queries.                                    |
-| To-one JOIN FETCH Country                       | `/demo/join-fetch/to-one`                         |           1 |            500 |          1.48 |        0 |          31 |                56 | Best full-list JOIN FETCH case: Country does not multiply the number of Author rows.                                    |
-| One collection JOIN FETCH Books                 | `/demo/join-fetch/books`                          |           1 |         10,000 |         11.11 |        0 |         156 |               211 | Eliminates Books N+1 with one query, but the database still returns one joined row per Book.                            |
-| Multiple collection JOIN FETCH Books and Awards | `/demo/join-fetch/cartesian`                      |           1 |        100,000 |         -6.30 |        3 |         500 |               764 | Worst row-volume case: 20 Books × 10 Awards creates 200 joined rows per Author.                                         |
-| Pagination with to-one JOIN FETCH Country       | `/demo/pagination/to-one?page=0&size=10`          |           2 |             10 |          0.25 |        0 |          15 |                25 | Safe pagination: the content query applies limit/offset at the database, plus one Page count query.                     |
-| Pagination with collection JOIN FETCH Books     | `/demo/pagination/books?page=0&size=10`           |           2 |         10,000 |         15.98 |        0 |         484 |               645 | Bad: only 10 Authors are returned, but Hibernate hydrates all 500 Authors and 10,000 Books before paginating in memory. |
-| Safe two-step pagination                        | `/demo/pagination/safe?page=0&size=10`            |           3 |            210 |          0.84 |        0 |          31 |                31 | Recommended: paginate 10 Author IDs, then fetch only their 200 Books in a bounded association query.                    |
-
-### Memory / GC Focus
-
-| Endpoint                                          | Heap Before MB | Heap After MB | Heap Delta MB | GC Before | GC After | GC Delta | Interpretation                                                                                                                                                |
-| ------------------------------------------------- | -------------: | ------------: | ------------: | --------: | -------: | -------: | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/demo/pagination/n-plus-one/book?page=0&size=10` |          60.65 |         66.66 |          6.01 |        28 |       28 |        0 | Initializes 10 lazy Books collections and loads 200 Books. The request retains a moderate amount of heap.                                                     |
-| `/demo/n-plus-one/book`                           |          67.16 |         82.97 |         15.81 |        28 |       28 |        0 | Loads 500 Authors and 10,000 Books through 500 secondary collection queries, producing substantial retained heap growth.                                      |
-| `/demo/n-plus-one/book&award`                     |          42.50 |         49.10 |          6.59 |        37 |       38 |        1 | Loads 15,500 entities and initializes 1,000 collections. GC occurred during execution, so heap delta alone understates total allocation.                      |
-| `/demo/join-fetch/to-one`                         |          62.47 |         63.95 |          1.48 |        29 |       29 |        0 | Stable memory usage because the query returns one joined row per Author and loads only 50 unique Country entities.                                            |
-| `/demo/join-fetch/books`                          |          64.18 |         75.29 |         11.11 |        29 |       29 |        0 | Moderate heap growth while hydrating 500 Authors, 10,000 Books, and 500 initialized Books collections.                                                        |
-| `/demo/join-fetch/cartesian`                      |          75.39 |         69.09 |         -6.30 |        29 |       32 |        3 | High temporary allocation pressure caused by 100,000 joined rows triggered three GC events. The negative delta does not mean the request allocated no memory. |
-| `/demo/pagination/to-one?page=0&size=10`          |          69.24 |         69.49 |          0.25 |        32 |       32 |        0 | Very stable memory usage because only 10 Authors and 10 Country entities are loaded.                                                                          |
-| `/demo/pagination/books?page=0&size=10`           |         104.69 |        120.67 |         15.98 |        27 |       27 |        0 | Although the API returns only 10 Authors, Hibernate hydrates all 500 Authors and 10,000 Books before applying pagination in memory.                           |
-| `/demo/pagination/safe?page=0&size=10`            |          69.57 |         70.41 |          0.84 |        32 |       32 |        0 | Bounded memory usage because only 10 Authors, their Countries, and 200 Books are hydrated.                                                                    |
-
-### CPU / Time Focus
-
-| Endpoint                                          | CPU Time MS | Execution Time MS | Entity Load Count | Collection Load Count | Query Count | Interpretation                                                                                                            |
-| ------------------------------------------------- | ----------: | ----------------: | ----------------: | --------------------: | ----------: | ------------------------------------------------------------------------------------------------------------------------- |
-| `/demo/pagination/n-plus-one/book?page=0&size=10` |         140 |               202 |               210 |                    10 |          12 | One page query, one count query, and 10 lazy Books queries load 10 Authors and 200 Books.                                 |
-| `/demo/n-plus-one/book`                           |         453 |               883 |            10,500 |                   500 |         501 | High database round-trip cost: every Author initializes its Books collection with a separate SQL statement.               |
-| `/demo/n-plus-one/book&award`                     |         812 |             1,430 |            15,500 |                 1,000 |       1,001 | Highest statement count and longest execution time: every Author initializes both Books and Awards independently.         |
-| `/demo/join-fetch/to-one`                         |          31 |                56 |               550 |                     0 |           1 | Most efficient full-list scenario: one query loads 500 Authors and 50 unique Countries without collection multiplication. |
-| `/demo/join-fetch/books`                          |         156 |               211 |            10,500 |                   500 |           1 | Replaces 500 lazy queries with one query, but Hibernate must still process 10,000 joined rows.                            |
-| `/demo/join-fetch/cartesian`                      |         500 |               764 |            15,500 |                 1,000 |           1 | Only one query is executed, but Hibernate processes 100,000 SQL rows and initializes two collections per Author.          |
-| `/demo/pagination/to-one?page=0&size=10`          |          15 |                25 |                20 |                     0 |           2 | Fast and predictable: 10 Authors and 10 Countries are loaded using a paginated content query and count query.             |
-| `/demo/pagination/books?page=0&size=10`           |         484 |               645 |            10,500 |                   500 |           2 | Inefficient pagination: 10 Authors are returned, but 500 Authors and 10,000 Books are loaded before in-memory pagination. |
-| `/demo/pagination/safe?page=0&size=10`            |          31 |                31 |               220 |                    10 |           3 | Executes one more statement than unsafe pagination, but loads only 10 Authors, 10 Countries, and 200 Books.               |
-
-### Main Comparison
-
-| Comparison                      | Bad Case                                                         | Better Case                                 | Main Evidence                                                                                             |
-| ------------------------------- | ---------------------------------------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Loading Authors with Books      | N+1 Books: 501 queries, 883 ms                                   | JOIN FETCH Books: 1 query, 211 ms           | JOIN FETCH avoids 500 secondary database round trips.                                                     |
-| Loading Books and Awards        | N+1 Books and Awards: 1,001 queries, 1,430 ms                    | Cartesian JOIN FETCH: 1 query, 764 ms       | Cartesian avoids round trips but still suffers from 100,000 joined rows. Neither is ideal for large data. |
-| Paginating Authors with Books   | Collection JOIN FETCH pagination: 10,500 entities loaded, 645 ms | Safe pagination: 220 entities loaded, 31 ms | Safe pagination loads only data belonging to the requested page.                                          |
-| Paginating Authors with Country | To-one JOIN FETCH pagination: 2 queries, 25 ms                   | —                                           | Safe because a to-one join does not duplicate parent rows.                                                |
-| Paginated lazy loading          | Pagination N+1: 12 queries, 202 ms                               | Safe pagination: 3 queries, 31 ms           | The page limits N+1 to 10 Authors, but still causes one lazy query per Author.                            |
-
-### Row Explosion Focus
-
-| Scenario                  | Authors | Books per Author | Awards per Author | Estimated Rows | Why It Matters                           |
-| ------------------------- | ------: | ---------------: | ----------------: | -------------: | ---------------------------------------- |
-| To-one fetch              |     500 |                — |                 — |            500 | Rows stay close to author count.         |
-| One collection fetch      |     500 |               20 |                 — |         10,000 | Rows grow as `authors x books`.          |
-| Multiple collection fetch |     500 |               20 |                10 |        100,000 | Rows grow as `authors x books x awards`. |
-
-
-## How To Read The Results
-
-A lower `queryCount` is not automatically better. Compare it together with:
-
-- `estimatedCartesianRows`
-- `heapDeltaMB`
-- `gcDelta`
+- `estimatedDatabaseRows`
+- `threadAllocatedMb`
+- `gcCountDelta`
 - `cpuTimeMs`
 - `executionTimeMs`
-- `entityLoadCount`
-- `collectionLoadCount`
+- `ormQueryExecutionCount`
+- `preparedStatementCount`
+- `sqlStatementCount`
 
-The most important lesson in this module:
+Core lesson:
 
 ```text
-One SQL query can still be slow if that query returns a huge joined result set.
+One SQL query can still be slow or fail if it returns a huge joined result set.
 ```
 
-For `JOIN FETCH` with multiple collections, the backend may do more work even though query count looks better. That extra work appears as memory growth, GC activity, CPU time, entity hydration, collection loading, and slower response time.
+For multiple to-many `JOIN FETCH` scenarios, query count can look excellent while memory, allocation, CPU, GC, and row volume are terrible.

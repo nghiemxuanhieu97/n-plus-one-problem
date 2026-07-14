@@ -1,6 +1,5 @@
 package com.example.joinfetch.dto.record;
 
-
 import java.util.List;
 
 public record Response<T>(
@@ -17,7 +16,7 @@ public record Response<T>(
 
         double executionTimeMs,
         double cpuTimeMs,
-        double heapDeltaMb,
+        double threadAllocatedMb,
         long gcCountDelta,
 
         T result
@@ -52,7 +51,7 @@ public record Response<T>(
             List<String> sqlStatements,
             double executionTimeMs,
             double cpuTimeMs,
-            double heapDeltaMb,
+            double threadAllocatedMb,
             long gcCountDelta
     ) {
         return new Response<>(
@@ -65,7 +64,7 @@ public record Response<T>(
                 estimatedDatabaseRows,
                 executionTimeMs,
                 cpuTimeMs,
-                heapDeltaMb,
+                threadAllocatedMb,
                 gcCountDelta,
                 result
         );

@@ -74,10 +74,6 @@ public interface AuthorRepository extends JpaRepository<Author, Long> {
                     from Author a
                     join fetch a.books
                     order by a.id
-                    """,
-            countQuery = """
-                    select count(a)
-                    from Author a
                     """
     )
     Page<Author> findPageWithBooksJoinFetch(Pageable pageable);

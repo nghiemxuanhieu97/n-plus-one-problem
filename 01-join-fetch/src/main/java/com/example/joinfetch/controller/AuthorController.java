@@ -19,46 +19,38 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/demo")
+@RequestMapping("/demos/authors")
 @RequiredArgsConstructor
 @OpenAPIDefinition(
         tags = {
                 @Tag(
-                        name = "N+1 Problem Demonstrations",
+                        name = "Baseline",
                         description = "Các API minh họa vấn đề N+1"
                 ),
                 @Tag(
-                        name = "Good JOIN FETCH Scenarios",
-                        description = "Các trường hợp sử dụng JOIN FETCH phù hợp"
+                        name = "JOIN FETCH",
+                        description = "Các trường hợp JOIN FETCH"
                 ),
                 @Tag(
-                        name = "Cartesian Product Demonstrations",
-                        description = "Các trường hợp JOIN FETCH gây Cartesian product"
-                ),
-                @Tag(
-                        name = "Pagination Demonstrations",
+                        name = "Pagination",
                         description = "Các trường hợp pagination với JOIN FETCH"
-                ),
-                @Tag(
-                        name = "Performance Comparison APIs",
-                        description = "Các API so sánh hiệu suất"
                 )
         }
 )
 public class AuthorController {
 
     private final AuthorService authorService;
-    @Tag(name = "Good JOIN FETCH Scenarios")
+    @Tag(name = "Baseline")
     @Operation(
             summary = "Load Authors only",
             description = "Returns Authors without touching lazy associations."
     )
-    @GetMapping("/authors/basic")
-    public Response<List<AuthorBasicDto>> demoAuthorsOnly() {
+    @GetMapping("/baseline")
+    public Response<List<AuthorBasicDto>> getBaselineAuthors() {
         return authorService.demoAuthorsOnly();
     }
 
-    @Tag(name = "N+1 Problem Demonstrations")
+    @Tag(name = "Baseline")
     @Operation(
             summary = "N+1 problem",
             description = """
@@ -83,10 +75,10 @@ public class AuthorController {
             responses = @ApiResponse(responseCode = "200", description = "N+1 demo metrics")
     )
     @GetMapping("/n-plus-one/book")
-    public Response<List<AuthorBooksDto>> demoNPlusOne() {
+    public Response<List<AuthorBooksDto>> getAuthorsWithNPlusOneBooks() {
         return authorService.demoNPlusOneBook();
     }
-    @Tag(name = "N+1 Problem Demonstrations")
+    @Tag(name = "Baseline")
     @Operation(
             summary = "N+1 problem",
             description = """
@@ -110,12 +102,12 @@ public class AuthorController {
                     """,
             responses = @ApiResponse(responseCode = "200", description = "N+1 demo metrics")
     )
-    @GetMapping("/n-plus-one/book&award")
-    public Response<List<AuthorBooksAwardsDto>> demoNPlusOneBookAward() {
+    @GetMapping("/n-plus-one/book-and-award")
+    public Response<List<AuthorBooksAwardsDto>> getAuthorsWithNPlusOneBooksAndAwards() {
         return authorService.demoNPlusOneBookAward();
     }
 
-    @Tag(name = "Good JOIN FETCH Scenarios")
+    @Tag(name = "JOIN FETCH")
     @Operation(
             summary = "JOIN FETCH with to-one relation",
             description = """
@@ -139,12 +131,12 @@ public class AuthorController {
                     """,
             responses = @ApiResponse(responseCode = "200", description = "To-one JOIN FETCH metrics")
     )
-    @GetMapping("/join-fetch/to-one")
-    public Response<List<AuthorCountryDto>> demoJoinFetchToOne() {
+    @GetMapping("/join-fetch/country")
+    public Response<List<AuthorCountryDto>> getAuthorsWithJoinFetchedCountry() {
         return authorService.demoJoinFetchToOne();
     }
 
-    @Tag(name = "Good JOIN FETCH Scenarios")
+    @Tag(name = "JOIN FETCH")
     @Operation(
             summary = "JOIN FETCH one collection",
             description = """
@@ -168,12 +160,12 @@ public class AuthorController {
                     """,
             responses = @ApiResponse(responseCode = "200", description = "One collection JOIN FETCH metrics")
     )
-    @GetMapping("/join-fetch/books")
-    public Response<List<AuthorBooksDto>> demoJoinFetchBooks() {
+    @GetMapping("/join-fetch/book")
+    public Response<List<AuthorBooksDto>> getAuthorsWithJoinFetchedBooks() {
         return authorService.demoJoinFetchBooks();
     }
 
-    @Tag(name = "Cartesian Product Demonstrations")
+    @Tag(name = "JOIN FETCH")
     @Operation(
             summary = "Multiple collection JOIN FETCH",
             description = """
@@ -197,11 +189,11 @@ public class AuthorController {
                     """,
             responses = @ApiResponse(responseCode = "200", description = "Cartesian product metrics")
     )
-    @GetMapping("/join-fetch/cartesian")
-    public Response<List<AuthorBooksAwardsDto>> demoCartesianProduct() {
+    @GetMapping("/join-fetch/book-and-award")
+    public Response<List<AuthorBooksAwardsDto>> getAuthorsWithJoinFetchedBooksAndAwards() {
         return authorService.demoCartesianProduct();
     }
-    @Tag(name = "N+1 Problem Demonstrations")
+    @Tag(name = "Baseline")
     @GetMapping("/pagination/n-plus-one/book")
     @Operation(
             summary = "Pagination with Author then fetch books")
@@ -211,7 +203,7 @@ public class AuthorController {
     ) {
         return authorService.demoPaginationNPlusOne(page, size);
     }
-    @Tag(name = "Pagination Demonstrations")
+    @Tag(name = "Pagination")
     @Operation(
             summary = "Pagination with to-one JOIN FETCH",
             description = """
@@ -235,7 +227,7 @@ public class AuthorController {
                     """,
             responses = @ApiResponse(responseCode = "200", description = "Good pagination metrics")
     )
-    @GetMapping("/pagination/to-one")
+    @GetMapping("/pagination/join-fetch/country")
     public Response<List<AuthorCountryDto>> demoPaginationToOne(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size
@@ -243,7 +235,7 @@ public class AuthorController {
         return authorService.demoPaginationToOne(page, size);
     }
 
-    @Tag(name = "Pagination Demonstrations")
+    @Tag(name = "Pagination")
     @Operation(
             summary = "Pagination with collection JOIN FETCH",
             description = """
@@ -269,7 +261,7 @@ public class AuthorController {
                     """,
             responses = @ApiResponse(responseCode = "200", description = "Bad pagination metrics")
     )
-    @GetMapping("/pagination/books")
+    @GetMapping("/pagination/join-fetch/book")
     public Response<List<AuthorBooksDto>> demoPaginationBooksBad(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size
@@ -277,7 +269,7 @@ public class AuthorController {
         return authorService.demoPaginationBooksBad(page, size);
     }
 
-    @Tag(name = "Pagination Demonstrations")
+    @Tag(name = "Pagination")
     @Operation(
             summary = "Safe pagination strategy",
             description = """
@@ -303,99 +295,12 @@ public class AuthorController {
                     """,
             responses = @ApiResponse(responseCode = "200", description = "Safe pagination metrics")
     )
-    @GetMapping("/pagination/safe")
+    @GetMapping("/pagination/two-step/book")
     public Response<List<AuthorBooksDto>> demoSafePagination(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size
     ) {
         return authorService.demoSafePagination(page, size);
     }
-//
-//    @Tag(name = "Performance Comparison APIs")
-//    @Operation(
-//            summary = "Batch fetch comparison",
-//            description = """
-//                    Title: Batch Fetch Comparison
-//
-//                    Purpose: Compare lazy loading with hibernate.default_batch_fetch_size against JOIN FETCH.
-//
-//                    JPQL: select a from Author a, then lazy books; compared with select distinct a from Author a join fetch a.books.
-//
-//                    Expected SQL: batch fetching groups lazy collection loads; JOIN FETCH returns joined rows.
-//
-//                    Backend execution flow: run lazy batched access, then run JOIN FETCH, then compare timings.
-//
-//                    Why useful: JOIN FETCH is not always the fastest solution for large result sets.
-//
-//                    Expected performance impact: depends on data shape and page size.
-//
-//                    Memory / CPU implications: batch fetching can reduce huge joined result sets.
-//
-//                    Production recommendation: measure both with realistic data.
-//                    """,
-//            responses = @ApiResponse(responseCode = "200", description = "Batch fetch comparison")
-//    )
-//    @GetMapping("/batch-fetch")
-//    public Response<List<AuthorBooksDto>> demoBatchFetchComparison() {
-//        return authorService.demoBatchFetchComparison();
-//    }
-//
-//    @Tag(name = "Performance Comparison APIs")
-//    @Operation(
-//            summary = "Memory explosion estimate",
-//            description = """
-//                    Title: Memory Explosion Scenario
-//
-//                    Purpose: Estimate the number of SQL rows that a multi-collection JOIN FETCH would create.
-//
-//                    JPQL: select distinct a from Author a join fetch a.books join fetch a.awards
-//
-//                    Expected SQL: authors join books join awards.
-//
-//                    Backend execution flow: count the joined rows instead of hydrating the full graph.
-//
-//                    Why useful: shows risk before running an expensive query.
-//
-//                    Expected performance impact: generated rows grow multiplicatively.
-//
-//                    Memory / CPU implications: result-set size drives hydration and de-duplication cost.
-//
-//                    Production recommendation: avoid multi-collection JOIN FETCH for large datasets.
-//                    """,
-//            responses = @ApiResponse(responseCode = "200", description = "Memory estimate")
-//    )
-//    @GetMapping("/performance/memory-explosion")
-//    public Response<List<AuthorBasicDto>> demoMemoryExplosionEstimate() {
-//        return authorService.demoMemoryExplosionEstimate();
-//    }
-
-//    @Tag(name = "Production Recommended Solutions")
-//    @Operation(
-//            summary = "Production recommendations",
-//            description = """
-//                    Title: Production Recommended Solutions
-//
-//                    Purpose: Summarize practical rules after running the demos.
-//
-//                    JPQL: not applicable.
-//
-//                    Expected SQL: not applicable.
-//
-//                    Backend execution flow: returns static guidance.
-//
-//                    Why useful: turns the demo into operational rules.
-//
-//                    Expected performance impact: helps choose the right strategy before coding.
-//
-//                    Memory / CPU implications: warns about unbounded collection fetches.
-//
-//                    Production recommendation: follow these rules and measure with Hibernate statistics.
-//                    """,
-//            responses = @ApiResponse(responseCode = "200", description = "Recommendations")
-//    )
-//    @GetMapping("/production/recommendations")
-//    public List<String> productionRecommendations() {
-//        return authorService.productionRecommendations();
-//    }
 }
 

@@ -39,7 +39,7 @@ public class AuthorService {
                 .map(AuthorBasicDto::fromEntity)
                 .toList();
 
-        return Response.payload(result, result.size());
+        return Response.payload(result.stream().limit(5).toList(), result.size());
     }
 
     // =========================================================
@@ -62,7 +62,8 @@ public class AuthorService {
                 .toList();
 
         long estimatedRows = result.size() + countBooks(result);
-        return Response.payload(result, estimatedRows);
+        List<AuthorBooksDto> previewResult = result.stream().limit(5).toList();
+        return Response.payload(result.stream().limit(5).toList(), estimatedRows);
     }
 
     /**
@@ -82,8 +83,8 @@ public class AuthorService {
         long estimatedRows = result.size()
                 + countBooksFromBooksAwardsDto(result)
                 + countAwards(result);
-
-        return Response.payload(result, estimatedRows);
+        List<AuthorBooksAwardsDto> reviewResult = result.stream().limit(5).toList();
+        return Response.payload(reviewResult, estimatedRows);
     }
 
     // =========================================================
@@ -98,8 +99,8 @@ public class AuthorService {
                 .stream()
                 .map(AuthorCountryDto::fromEntity)
                 .toList();
-
-        return Response.payload(result, result.size());
+        
+        return Response.payload(result.stream().limit(5).toList(), result.size());
     }
 
     @BenchmarkScenario("JOIN_FETCH_BOOKS")
@@ -111,7 +112,7 @@ public class AuthorService {
                 .map(AuthorBooksDto::fromEntity)
                 .toList();
 
-        return Response.payload(result, countBooks(result));
+        return Response.payload(result.stream().limit(5).toList(), countBooks(result));
     }
 
     @BenchmarkScenario("JOIN_FETCH_CARTESIAN")
@@ -123,7 +124,7 @@ public class AuthorService {
                 .map(AuthorBooksAwardsDto::fromEntity)
                 .toList();
 
-        return Response.payload(result, estimateCartesianRows(result));
+        return Response.payload(result.stream().limit(5).toList(), estimateCartesianRows(result));
     }
 
     // =========================================================
@@ -143,7 +144,7 @@ public class AuthorService {
                 .toList();
 
         long estimatedRows = result.size() + countBooks(result);
-        return Response.payload(result, estimatedRows);
+        return Response.payload(result.stream().limit(5).toList(), estimatedRows);
     }
 
     @BenchmarkScenario("PAGINATION_TO_ONE")
@@ -157,7 +158,7 @@ public class AuthorService {
                 .map(AuthorCountryDto::fromEntity)
                 .toList();
 
-        return Response.payload(result, result.size());
+        return Response.payload(result.stream().limit(5).toList(), result.size());
     }
 
     @BenchmarkScenario("PAGINATION_COLLECTION_JOIN_FETCH")
@@ -184,7 +185,7 @@ public class AuthorService {
                 allLoadedEntities - authorPage.getTotalElements()
         );
 
-        return Response.payload(result, estimatedRows);
+        return Response.payload(result.stream().limit(5).toList(), estimatedRows);
     }
 
     @BenchmarkScenario("SAFE_PAGINATION_TWO_STEP")
@@ -201,64 +202,10 @@ public class AuthorService {
                 .toList();
 
         long estimatedRows = idPage.getContent().size() + countBooks(result);
-        return Response.payload(result, estimatedRows);
+        List<AuthorBooksDto> previewResult = result.stream().limit(5).toList();
+        return Response.payload(result.stream().limit(5).toList(), estimatedRows);
     }
 
-    // =========================================================
-    // OPTIONAL COMPARISON / ESTIMATE ENDPOINTS
-    // =========================================================
-
-    @BenchmarkScenario("BATCH_FETCH_COMPARISON")
-    @Transactional(readOnly = true)
-    public Response<List<AuthorBooksDto>> demoBatchFetchComparison() {
-        List<AuthorBooksDto> lazyResult = authorRepository.findAll().stream()
-                .map(AuthorBooksDto::fromEntity)
-                .toList();
-
-        // Prevent initialized collections from making the JOIN FETCH half of the
-        // comparison appear artificially cheap.
-        entityManager.clear();
-
-        List<AuthorBooksDto> joinedResult = authorRepository
-                .findAllWithBooksJoinFetch()
-                .stream()
-                .map(AuthorBooksDto::fromEntity)
-                .toList();
-
-        long estimatedRows = Math.max(
-                countBooks(lazyResult),
-                countBooks(joinedResult)
-        );
-
-        return Response.payload(joinedResult, estimatedRows);
-    }
-
-    @BenchmarkScenario("MEMORY_EXPLOSION_ESTIMATE")
-    @Transactional(readOnly = true)
-    public Response<List<AuthorBasicDto>> demoMemoryExplosionEstimate() {
-        authorRepository.countAuthors();
-        authorRepository.countBooks();
-        authorRepository.countAwards();
-
-        long estimatedRows = authorRepository
-                .countRowsWhenJoiningBooksAndAwards();
-
-        return Response.payload(List.of(), estimatedRows);
-    }
-
-    public List<String> productionRecommendations() {
-        return List.of(
-                "Keep associations LAZY by default.",
-                "Use JOIN FETCH for required to-one relationships.",
-                "Use JOIN FETCH for one to-many collection only when result size is controlled.",
-                "Do not apply Pageable directly to a collection fetch join for large datasets.",
-                "Use two-step pagination: page parent IDs, then fetch associations by IDs.",
-                "Avoid fetching multiple to-many collections in one query.",
-                "Use DTO projection for API-specific read models.",
-                "Use batch fetching when controlled lazy loading is preferable to one large join.",
-                "Inspect SQL logs, prepared statement count, entity loads, collection loads, row volume, CPU, heap, and GC together."
-        );
-    }
 
     private long countBooks(List<AuthorBooksDto> authors) {
         return authors.stream()

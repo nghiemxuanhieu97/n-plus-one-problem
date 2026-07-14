@@ -39,18 +39,33 @@ public class BenchmarkAspect {
         Statistics statistics = getStatistics();
 
         statistics.clear();
-        CollectingQueryListener.getAndClear();
 
-        ThreadMXBean threadMxBean =
+        // Bắt đầu thu SQL ở tầng JDBC.
+        CollectingP6SpyLogger.begin();
+
+        /*
+         * Bean tiêu chuẩn dùng để đo CPU time
+         * của request thread.
+         */
+        ThreadMXBean cpuMxBean =
                 ManagementFactory.getThreadMXBean();
 
-        enableThreadCpuTiming(threadMxBean);
+        enableThreadCpuTiming(cpuMxBean);
+
+        /*
+         * Bean mở rộng của JVM dùng để đo tổng số byte
+         * được cấp phát bởi request thread.
+         */
+        com.sun.management.ThreadMXBean allocationMxBean =
+                getAllocationMxBean();
+
+        enableThreadAllocationTracking(allocationMxBean);
 
         BenchmarkSnapshot snapshot = new BenchmarkSnapshot(
                 System.nanoTime(),
-                usedHeapMb(),
                 gcCount(),
-                currentThreadCpuNanos(threadMxBean)
+                currentThreadCpuNanos(cpuMxBean),
+                currentThreadAllocatedBytes(allocationMxBean)
         );
 
         try {
@@ -63,20 +78,23 @@ public class BenchmarkAspect {
                 );
             }
 
-            double executionTimeMs =
-                    nanosToMillis(
-                            System.nanoTime()
-                                    - snapshot.startedAtNanos()
-                    );
+            double executionTimeMs = nanosToMillis(
+                    System.nanoTime()
+                            - snapshot.startedAtNanos()
+            );
 
-            double cpuTimeMs =
-                    nanosToMillis(
-                            currentThreadCpuNanos(threadMxBean)
-                                    - snapshot.cpuBeforeNanos()
-                    );
+            double cpuTimeMs = nanosToMillis(
+                    currentThreadCpuNanos(cpuMxBean)
+                            - snapshot.cpuBeforeNanos()
+            );
 
-            double heapDeltaMb =
-                    usedHeapMb() - snapshot.heapBeforeMb();
+            long allocatedBytesAfter =
+                    currentThreadAllocatedBytes(allocationMxBean);
+
+            double threadAllocatedMb = allocationDeltaMb(
+                    snapshot.allocatedBytesBefore(),
+                    allocatedBytesAfter
+            );
 
             long gcCountDelta =
                     gcCount() - snapshot.gcBefore();
@@ -84,8 +102,18 @@ public class BenchmarkAspect {
             List<String> ormQueries =
                     Arrays.asList(statistics.getQueries());
 
+            /*
+             * SQL được P6Spy dựng lại cùng giá trị bind.
+             */
             List<String> sqlStatements =
-                    CollectingQueryListener.getAndClear();
+                    CollectingP6SpyLogger.end();
+
+            int sqlPreviewLimit = 20;
+
+            List<String> sqlStatementsPreview =
+                    sqlStatements.stream()
+                            .limit(sqlPreviewLimit)
+                            .toList();
 
             return response.withBenchmark(
                     scenario.value(),
@@ -93,14 +121,17 @@ public class BenchmarkAspect {
                     ormQueries,
                     sqlStatements.size(),
                     statistics.getPrepareStatementCount(),
-                    sqlStatements,
+                    sqlStatementsPreview,
                     executionTimeMs,
                     cpuTimeMs,
-                    heapDeltaMb,
+                    threadAllocatedMb,
                     gcCountDelta
             );
         } catch (Throwable throwable) {
-            CollectingQueryListener.getAndClear();
+            /*
+             * Luôn xóa ThreadLocal, kể cả khi API bị lỗi.
+             */
+            CollectingP6SpyLogger.end();
             throw throwable;
         }
     }
@@ -109,13 +140,6 @@ public class BenchmarkAspect {
         return entityManagerFactory
                 .unwrap(SessionFactory.class)
                 .getStatistics();
-    }
-
-    private double usedHeapMb() {
-        Runtime runtime = Runtime.getRuntime();
-
-        return (runtime.totalMemory() - runtime.freeMemory())
-                / BYTES_PER_MB;
     }
 
     private long gcCount() {
@@ -135,27 +159,85 @@ public class BenchmarkAspect {
     }
 
     private void enableThreadCpuTiming(
-            ThreadMXBean threadMxBean
+            ThreadMXBean cpuMxBean
     ) {
-        if (threadMxBean.isThreadCpuTimeSupported()
-                && !threadMxBean.isThreadCpuTimeEnabled()) {
+        if (cpuMxBean.isThreadCpuTimeSupported()
+                && !cpuMxBean.isThreadCpuTimeEnabled()) {
 
-            threadMxBean.setThreadCpuTimeEnabled(true);
+            cpuMxBean.setThreadCpuTimeEnabled(true);
         }
     }
 
     private long currentThreadCpuNanos(
-            ThreadMXBean threadMxBean
+            ThreadMXBean cpuMxBean
     ) {
-        if (!threadMxBean.isCurrentThreadCpuTimeSupported()
-                || !threadMxBean.isThreadCpuTimeEnabled()) {
+        if (!cpuMxBean.isCurrentThreadCpuTimeSupported()
+                || !cpuMxBean.isThreadCpuTimeEnabled()) {
+
             return 0;
         }
 
-        return threadMxBean.getCurrentThreadCpuTime();
+        return cpuMxBean.getCurrentThreadCpuTime();
+    }
+
+    private com.sun.management.ThreadMXBean getAllocationMxBean() {
+        ThreadMXBean threadMxBean =
+                ManagementFactory.getThreadMXBean();
+
+        if (threadMxBean
+                instanceof com.sun.management.ThreadMXBean allocationMxBean) {
+
+            return allocationMxBean;
+        }
+
+        return null;
+    }
+
+    private void enableThreadAllocationTracking(
+            com.sun.management.ThreadMXBean allocationMxBean
+    ) {
+        if (allocationMxBean == null) {
+            return;
+        }
+
+        if (allocationMxBean.isThreadAllocatedMemorySupported()
+                && !allocationMxBean.isThreadAllocatedMemoryEnabled()) {
+
+            allocationMxBean.setThreadAllocatedMemoryEnabled(true);
+        }
+    }
+
+    private long currentThreadAllocatedBytes(
+            com.sun.management.ThreadMXBean allocationMxBean
+    ) {
+        if (allocationMxBean == null
+                || !allocationMxBean.isThreadAllocatedMemorySupported()
+                || !allocationMxBean.isThreadAllocatedMemoryEnabled()) {
+
+            return -1;
+        }
+
+        return allocationMxBean.getCurrentThreadAllocatedBytes();
+    }
+
+    private double allocationDeltaMb(
+            long allocatedBefore,
+            long allocatedAfter
+    ) {
+        if (allocatedBefore < 0
+                || allocatedAfter < allocatedBefore) {
+
+            return -1;
+        }
+
+        return (allocatedAfter - allocatedBefore)
+                / BYTES_PER_MB;
     }
 
     private double nanosToMillis(long nanos) {
-        return Math.max(0, nanos / 1_000_000.0);
+        return Math.max(
+                0,
+                nanos / 1_000_000.0
+        );
     }
 }
