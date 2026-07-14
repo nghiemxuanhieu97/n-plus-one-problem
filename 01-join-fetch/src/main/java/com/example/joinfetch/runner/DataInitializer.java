@@ -1,8 +1,12 @@
 package com.example.joinfetch.runner;
 
+import com.example.joinfetch.entity.Award;
 import com.example.joinfetch.entity.Author;
 import com.example.joinfetch.entity.Book;
+import com.example.joinfetch.entity.Country;
 import com.example.joinfetch.repository.AuthorRepository;
+import jakarta.persistence.EntityManager;
+import org.springframework.beans.factory.annotation.Value;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -11,6 +15,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.stream.IntStream;
 
 @Component
 @Order(1)
@@ -19,36 +24,75 @@ import java.util.List;
 public class DataInitializer implements CommandLineRunner {
 
     private final AuthorRepository authorRepository;
+    private final EntityManager entityManager;
+
+    @Value("${demo.large-dataset:false}")
+    private boolean largeDataset;
 
     @Override
     @Transactional
     public void run(String... args) {
-        Author tolkien = Author.builder().name("J.R.R. Tolkien").build();
-        tolkien.getBooks().add(Book.builder().title("The Hobbit").publishYear(1937).author(tolkien).build());
-        tolkien.getBooks().add(Book.builder().title("The Fellowship of the Ring").publishYear(1954).author(tolkien).build());
-        tolkien.getBooks().add(Book.builder().title("The Two Towers").publishYear(1954).author(tolkien).build());
+        int countryCount = 50;
+        int authorCount = largeDataset ? 5_000 : 500;
+        int booksPerAuthor = largeDataset ? 50 : 20;
+        int awardsPerAuthor = largeDataset ? 20 : 10;
 
-        Author rowling = Author.builder().name("J.K. Rowling").build();
-        rowling.getBooks().add(Book.builder().title("Harry Potter and the Philosopher's Stone").publishYear(1997).author(rowling).build());
-        rowling.getBooks().add(Book.builder().title("Harry Potter and the Chamber of Secrets").publishYear(1998).author(rowling).build());
-        rowling.getBooks().add(Book.builder().title("Harry Potter and the Prisoner of Azkaban").publishYear(1999).author(rowling).build());
+        List<Country> countries = IntStream.rangeClosed(1, countryCount)
+                .mapToObj(this::createCountry)
+                .toList();
+        countries.forEach(entityManager::persist);
 
-        Author martin = Author.builder().name("George R.R. Martin").build();
-        martin.getBooks().add(Book.builder().title("A Game of Thrones").publishYear(1996).author(martin).build());
-        martin.getBooks().add(Book.builder().title("A Clash of Kings").publishYear(1998).author(martin).build());
-        martin.getBooks().add(Book.builder().title("A Storm of Swords").publishYear(2000).author(martin).build());
+        for (int authorIndex = 1; authorIndex <= authorCount; authorIndex++) {
+            Country country = entityManager.getReference(
+                    Country.class,
+                    countries.get((authorIndex - 1) % countries.size()).getId()
+            );
+            Author author = createAuthor(authorIndex, country, booksPerAuthor, awardsPerAuthor);
+            authorRepository.save(author);
 
-        Author orwell = Author.builder().name("George Orwell").build();
-        orwell.getBooks().add(Book.builder().title("Animal Farm").publishYear(1945).author(orwell).build());
-        orwell.getBooks().add(Book.builder().title("Nineteen Eighty-Four").publishYear(1949).author(orwell).build());
-        orwell.getBooks().add(Book.builder().title("Homage to Catalonia").publishYear(1938).author(orwell).build());
+            if (authorIndex % 100 == 0) {
+                entityManager.flush();
+                entityManager.clear();
+            }
+        }
 
-        Author dumas = Author.builder().name("Alexandre Dumas").build();
-        dumas.getBooks().add(Book.builder().title("The Three Musketeers").publishYear(1844).author(dumas).build());
-        dumas.getBooks().add(Book.builder().title("The Count of Monte Cristo").publishYear(1844).author(dumas).build());
-        dumas.getBooks().add(Book.builder().title("Twenty Years After").publishYear(1845).author(dumas).build());
+        log.info("Data initialized: {} countries, {} authors, {} books, {} awards (largeDataset={})",
+                countryCount,
+                authorCount,
+                authorCount * booksPerAuthor,
+                authorCount * awardsPerAuthor,
+                largeDataset);
+    }
 
-        authorRepository.saveAll(List.of(tolkien, rowling, martin, orwell, dumas));
-        log.info("Data initialized: 5 authors, 15 books");
+    private Country createCountry(int index) {
+        return Country.builder()
+                .name("Country " + index)
+                .location("Region " + ((index - 1) % 5 + 1))
+                .region("Continent Group " + ((index - 1) % 3 + 1))
+                .build();
+    }
+
+    private Author createAuthor(int authorIndex, Country country, int booksPerAuthor, int awardsPerAuthor) {
+        Author author = Author.builder()
+                .name("Author " + authorIndex)
+                .country(country)
+                .build();
+
+        for (int bookIndex = 1; bookIndex <= booksPerAuthor; bookIndex++) {
+            author.getBooks().add(Book.builder()
+                    .title("Author " + authorIndex + " - Book " + bookIndex)
+                    .publishYear(1980 + (bookIndex % 45))
+                    .author(author)
+                    .build());
+        }
+
+        for (int awardIndex = 1; awardIndex <= awardsPerAuthor; awardIndex++) {
+            author.getAwards().add(Award.builder()
+                    .name("Author " + authorIndex + " - Award " + awardIndex)
+                    .author(author)
+                    .build());
+        }
+
+        return author;
     }
 }
