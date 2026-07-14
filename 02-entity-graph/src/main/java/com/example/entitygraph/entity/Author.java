@@ -8,10 +8,20 @@ import java.util.List;
 
 @Entity
 @Table(name = "authors")
-@NamedEntityGraph(
-        name = "Author.withBooks",
-        attributeNodes = @NamedAttributeNode("books")
-)
+@NamedEntityGraphs({
+        @NamedEntityGraph(
+                name = "Author.withBooks",
+                attributeNodes = @NamedAttributeNode("books")
+        ),
+        @NamedEntityGraph(
+                name = "Author.withBooksAndPublisher",
+                attributeNodes = @NamedAttributeNode(value = "books", subgraph = "books.publisher"),
+                subgraphs = @NamedSubgraph(
+                        name = "books.publisher",
+                        attributeNodes = @NamedAttributeNode("publisher")
+                )
+        )
+})
 @Getter
 @Setter
 @Builder

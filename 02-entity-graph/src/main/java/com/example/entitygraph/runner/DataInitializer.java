@@ -2,7 +2,9 @@ package com.example.entitygraph.runner;
 
 import com.example.entitygraph.entity.Author;
 import com.example.entitygraph.entity.Book;
+import com.example.entitygraph.entity.Publisher;
 import com.example.entitygraph.repository.AuthorRepository;
+import com.example.entitygraph.repository.PublisherRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.CommandLineRunner;
@@ -19,36 +21,54 @@ import java.util.List;
 public class DataInitializer implements CommandLineRunner {
 
     private final AuthorRepository authorRepository;
+    private final PublisherRepository publisherRepository;
 
     @Override
     @Transactional
     public void run(String... args) {
+        Publisher harperCollins = Publisher.builder().name("HarperCollins").build();
+        Publisher bloomsbury = Publisher.builder().name("Bloomsbury").build();
+        Publisher bantam = Publisher.builder().name("Bantam Books").build();
+        Publisher secker = Publisher.builder().name("Secker & Warburg").build();
+        Publisher penguin = Publisher.builder().name("Penguin Classics").build();
+
+        publisherRepository.saveAll(List.of(harperCollins, bloomsbury, bantam, secker, penguin));
+
         Author tolkien = Author.builder().name("J.R.R. Tolkien").build();
-        tolkien.getBooks().add(Book.builder().title("The Hobbit").publishYear(1937).author(tolkien).build());
-        tolkien.getBooks().add(Book.builder().title("The Fellowship of the Ring").publishYear(1954).author(tolkien).build());
-        tolkien.getBooks().add(Book.builder().title("The Two Towers").publishYear(1954).author(tolkien).build());
+        addBook(tolkien, "The Hobbit", 1937, harperCollins);
+        addBook(tolkien, "The Fellowship of the Ring", 1954, harperCollins);
+        addBook(tolkien, "The Two Towers", 1954, harperCollins);
 
         Author rowling = Author.builder().name("J.K. Rowling").build();
-        rowling.getBooks().add(Book.builder().title("Harry Potter and the Philosopher's Stone").publishYear(1997).author(rowling).build());
-        rowling.getBooks().add(Book.builder().title("Harry Potter and the Chamber of Secrets").publishYear(1998).author(rowling).build());
-        rowling.getBooks().add(Book.builder().title("Harry Potter and the Prisoner of Azkaban").publishYear(1999).author(rowling).build());
+        addBook(rowling, "Harry Potter and the Philosopher's Stone", 1997, bloomsbury);
+        addBook(rowling, "Harry Potter and the Chamber of Secrets", 1998, bloomsbury);
+        addBook(rowling, "Harry Potter and the Prisoner of Azkaban", 1999, bloomsbury);
 
         Author martin = Author.builder().name("George R.R. Martin").build();
-        martin.getBooks().add(Book.builder().title("A Game of Thrones").publishYear(1996).author(martin).build());
-        martin.getBooks().add(Book.builder().title("A Clash of Kings").publishYear(1998).author(martin).build());
-        martin.getBooks().add(Book.builder().title("A Storm of Swords").publishYear(2000).author(martin).build());
+        addBook(martin, "A Game of Thrones", 1996, bantam);
+        addBook(martin, "A Clash of Kings", 1998, bantam);
+        addBook(martin, "A Storm of Swords", 2000, bantam);
 
         Author orwell = Author.builder().name("George Orwell").build();
-        orwell.getBooks().add(Book.builder().title("Animal Farm").publishYear(1945).author(orwell).build());
-        orwell.getBooks().add(Book.builder().title("Nineteen Eighty-Four").publishYear(1949).author(orwell).build());
-        orwell.getBooks().add(Book.builder().title("Homage to Catalonia").publishYear(1938).author(orwell).build());
+        addBook(orwell, "Animal Farm", 1945, secker);
+        addBook(orwell, "Nineteen Eighty-Four", 1949, secker);
+        addBook(orwell, "Homage to Catalonia", 1938, secker);
 
         Author dumas = Author.builder().name("Alexandre Dumas").build();
-        dumas.getBooks().add(Book.builder().title("The Three Musketeers").publishYear(1844).author(dumas).build());
-        dumas.getBooks().add(Book.builder().title("The Count of Monte Cristo").publishYear(1844).author(dumas).build());
-        dumas.getBooks().add(Book.builder().title("Twenty Years After").publishYear(1845).author(dumas).build());
+        addBook(dumas, "The Three Musketeers", 1844, penguin);
+        addBook(dumas, "The Count of Monte Cristo", 1844, penguin);
+        addBook(dumas, "Twenty Years After", 1845, penguin);
 
         authorRepository.saveAll(List.of(tolkien, rowling, martin, orwell, dumas));
-        log.info("Data initialized: 5 authors, 15 books");
+        log.info("Data initialized: 5 authors, 15 books, 5 publishers");
+    }
+
+    private void addBook(Author author, String title, int publishYear, Publisher publisher) {
+        author.getBooks().add(Book.builder()
+                .title(title)
+                .publishYear(publishYear)
+                .author(author)
+                .publisher(publisher)
+                .build());
     }
 }
