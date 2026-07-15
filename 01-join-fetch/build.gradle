@@ -6,11 +6,11 @@ dependencies {
     implementation 'p6spy:p6spy:3.9.1'
 
 }
-tasks.named("bootRun") {
-    jvmArgs = [
-            "-Xms256m",
-            "-Xmx512m",
-            "-XX:MaxMetaspaceSize=256m",
-            "-XX:ActiveProcessorCount=2"
-    ]
-}
+//tasks.named("bootRun") {
+//    jvmArgs = [
+//            "-Xms256m",
+//            "-Xmx512m",
+//            "-XX:MaxMetaspaceSize=256m",
+//            "-XX:ActiveProcessorCount=2"
+//    ]
+//}

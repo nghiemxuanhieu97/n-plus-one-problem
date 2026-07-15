@@ -202,8 +202,33 @@ public class AuthorService {
                 .toList();
 
         long estimatedRows = idPage.getContent().size() + countBooks(result);
-        List<AuthorBooksDto> previewResult = result.stream().limit(5).toList();
         return Response.payload(result.stream().limit(5).toList(), estimatedRows);
+    }
+
+
+    @BenchmarkScenario("MANUAL_DEFINED_JOIN_FETCH_PAGINATION")
+    @Transactional(readOnly = true)
+    public Response<List<AuthorBooksDto>> demoSelfDefinedJoinFetchPaginationSQL(int page, int size) {
+        List<Author> authorPage = authorRepository.findAuthorWithDefinedPaginationSQL(size, page);
+
+        List<AuthorBooksDto> result = authorPage.stream()
+                .map(AuthorBooksDto::fromEntity)
+                .toList();
+
+        return Response.payload(result.stream().limit(5).toList(), result.size());
+    }
+
+
+    @BenchmarkScenario("MANUAL_DEFINED_JOIN_FETCH_PAGINATION")
+    @Transactional(readOnly = true)
+    public Response<List<AuthorBooksDto>> demoSelfDefinedJoinFetchPaginationJPQL(int page, int size) {
+        List<Author> authorPage = authorRepository.findAuthorWithDefinedPaginationJPQL(size, page);
+
+        List<AuthorBooksDto> result = authorPage.stream()
+                .map(AuthorBooksDto::fromEntity)
+                .toList();
+
+        return Response.payload(result.stream().limit(5).toList(), result.size());
     }
 
 

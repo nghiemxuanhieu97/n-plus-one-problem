@@ -30,12 +30,13 @@ public class Author {
     private Country country;
 
     @OneToMany(mappedBy = "author", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @OrderColumn(name = "book_order")
     @Builder.Default
     private List<Book> books = new ArrayList<>();
 
     @OneToMany(mappedBy = "author", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @Builder.Default
-    private Set<Award> awards = new LinkedHashSet<>();
+    private List<Award> awards = new ArrayList<>();
 
     @Lob
     @Column(columnDefinition = "LONGTEXT")

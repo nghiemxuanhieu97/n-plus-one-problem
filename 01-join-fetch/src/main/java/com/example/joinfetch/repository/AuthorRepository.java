@@ -119,5 +119,47 @@ public interface AuthorRepository extends JpaRepository<Author, Long> {
             join a.awards aw
             """)
     long countRowsWhenJoiningBooksAndAwards();
+
+//    @Query("""
+//    select distinct a
+//    from Author a
+//    join fetch a.books
+//    order by a.id
+//    limit :limit offset :offset
+//    """)
+//    List<Author> findAuthorWithDefinedPagination(
+//            @Param("limit") int limit,
+//            @Param("offset") int offset
+//    );
+
+    @Query(
+            value = """
+         select distinct a
+        from Author a
+        join fetch a.books
+        order by a.id
+        limit :rowLimit offset :noItem
+        """
+    )
+    List<Author> findAuthorWithDefinedPaginationJPQL(
+            @Param("rowLimit") int limit,
+            @Param("noItem") int offset
+    );
+
+    @Query(
+            value = """
+        select a.*
+        from authors a
+        join books b on b.author_id = a.id
+        order by a.id
+        limit :rowLimit offset :noItem
+        """,
+            nativeQuery = true
+    )
+    List<Author> findAuthorWithDefinedPaginationSQL(
+            @Param("rowLimit") int limit,
+            @Param("noItem") int offset
+    );
+
 }
 
