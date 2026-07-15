@@ -25,25 +25,41 @@ import java.util.List;
         tags = {
                 @Tag(
                         name = "Baseline",
-                        description = "Các API minh họa vấn đề N+1"
+                        description = "Baseline author loading and intentional N+1 demonstrations."
                 ),
                 @Tag(
-                        name = "JOIN FETCH",
-                        description = "Các trường hợp JOIN FETCH"
+                        name =  "Join Fetch without Pagination",
+                        description = "Join Fetch scenarios for to-one, one collection, and multiple collection fetches."
                 ),
                 @Tag(
                         name = "Pagination",
-                        description = "Các trường hợp pagination với JOIN FETCH"
+                        description = "Pagination patterns with Join Fetch, and manual query attempts."
                 )
         }
 )
 public class AuthorController {
 
     private final AuthorService authorService;
+
     @Tag(name = "Baseline")
     @Operation(
             summary = "Load Authors only",
-            description = "Returns Authors without touching lazy associations."
+            description = """
+                    Scenario: AUTHORS_ONLY
+
+                    Purpose: Establish the baseline cost of loading Author rows without touching lazy associations.
+
+                    Service flow: AuthorService.demoAuthorsOnly() calls authorRepository.findAll(), maps each Author to AuthorBasicDto, and returns a preview of the first 5 DTOs.
+
+                    Result DTO: AuthorBasicDto with id and name only.
+
+                    Associations accessed by mapper: none. The mapper does not call getCountry(), getBooks(), or getAwards().
+
+                    Expected behavior: one ORM author query and no lazy association SQL during DTO mapping.
+
+                    Metrics: estimatedDatabaseRows is the full number of Authors loaded, while result contains only a small preview.
+                    """,
+            responses = @ApiResponse(responseCode = "200", description = "Baseline author metrics and AuthorBasicDto preview")
     )
     @GetMapping("/baseline")
     public Response<List<AuthorBasicDto>> getBaselineAuthors() {
@@ -52,180 +68,172 @@ public class AuthorController {
 
     @Tag(name = "Baseline")
     @Operation(
-            summary = "N+1 problem",
+            summary = "N+1 Books",
             description = """
-                    Title: N+1 Problem with Lazy Books (BAD)
+                    Scenario: N_PLUS_ONE_BOOK
 
-                    Purpose: Load Authors first, then access author.getBooks() inside a loop.
+                    Purpose: Demonstrate the classic N+1 problem for a lazy one-to-many association.
 
-                    JPQL: select a from Author a
+                    Service flow: AuthorService.demoNPlusOneBook() loads all Authors first, then maps to AuthorBooksDto inside the transaction. The mapper intentionally calls author.getBooks().
 
-                    Expected SQL: one select from authors, then extra selects for lazy books. With hibernate.default_batch_fetch_size, Hibernate may batch those lazy book queries.
+                    Result DTO: AuthorBooksDto with id, name, and books. It does not include country or awards.
 
-                    Backend execution flow: Step 1 load parent Authors. Step 2 iterate Authors. Step 3 touch lazy Books. Step 4 Hibernate initializes collections.
+                    Why this is bad: after the initial Author query, Hibernate must initialize the books collection for each Author. Without batching, this can become one Author query plus many Books queries.
 
-                    Why bad: work happens after the parent query and may scale with parent count.
-
-                    Expected performance impact: many round trips without batching; fewer but still extra queries with batch fetching.
-
-                    Memory / CPU implications: entity hydration and collection initialization grow with loaded Authors and Books.
-
-                    Production recommendation: use JOIN FETCH, DTO projection, or batch fetching only when the API really needs the relationship.
+                    Metrics: SQL statements, ORM query execution count, CPU time, allocation, GC delta, and estimatedDatabaseRows include the DTO mapping work that triggers the lazy loads.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "N+1 demo metrics")
+            responses = @ApiResponse(responseCode = "200", description = "N+1 Books benchmark metrics and AuthorBooksDto preview")
     )
     @GetMapping("/n-plus-one/book")
     public Response<List<AuthorBooksDto>> getAuthorsWithNPlusOneBooks() {
         return authorService.demoNPlusOneBook();
     }
+
     @Tag(name = "Baseline")
     @Operation(
-            summary = "N+1 problem",
+            summary = "N+1 Books and Awards",
             description = """
-                    Title: N+1 Problem with Lazy Books, Awards (BAD)
+                    Scenario: N_PLUS_ONE_BOOK_AWARD
 
-                    Purpose: Load Authors first, then access author.getBooks() and getAwards() inside a loop. T
+                    Purpose: Demonstrate N+1 behavior for two lazy collections on the same root entity.
 
-                    JPQL: select a from Author a
+                    Service flow: AuthorService.demoNPlusOneBookAward() loads all Authors, then maps to AuthorBooksAwardsDto inside the transaction. The mapper intentionally calls author.getBooks() and author.getAwards().
 
-                    Expected SQL: one select from authors, then extra selects for lazy books.
+                    Result DTO: AuthorBooksAwardsDto with id, name, books, and awards. It does not include country.
 
-                    Backend execution flow: Step 1 load parent Authors. Step 2 iterate Authors. Step 3 touch lazy Books. Step 4 Hibernate initializes collections.
+                    Why this is worse than the Books-only case: each Author can require lazy initialization for both collections, so the request can produce many Books queries and many Awards queries after the initial Author query.
 
-                    Why bad: work happens after the parent query and may scale with parent count.
-
-                    Expected performance impact: many round trips without batching; fewer but still extra queries with batch fetching.
-
-                    Memory / CPU implications: entity hydration and collection initialization grow with loaded Authors and Books.
-
-                    Production recommendation: use JOIN FETCH, DTO projection, or batch fetching only when the API really needs the relationship.
+                    Metrics: estimatedDatabaseRows is based on Authors plus loaded Books plus loaded Awards. The JSON result is only a preview, but the benchmark work covers the full loaded set.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "N+1 demo metrics")
+            responses = @ApiResponse(responseCode = "200", description = "N+1 Books and Awards benchmark metrics")
     )
     @GetMapping("/n-plus-one/book-and-award")
     public Response<List<AuthorBooksAwardsDto>> getAuthorsWithNPlusOneBooksAndAwards() {
         return authorService.demoNPlusOneBookAward();
     }
 
-    @Tag(name = "JOIN FETCH")
+    @Tag(name =  "Join Fetch without Pagination")
     @Operation(
-            summary = "JOIN FETCH with to-one relation",
+            summary = "Join Fetch Country",
             description = """
-                    Title: JOIN FETCH Author -> Country (GOOD)
+                    Scenario: JOIN_FETCH_TO_ONE
 
-                    Purpose: Show safe JOIN FETCH with ManyToOne.
+                    Purpose: Show the safe Join Fetch case for a to-one association.
 
-                    JPQL: select a from Author a join fetch a.country order by a.id
+                    Repository query: select a from Author a Join Fetch a.country order by a.id
 
-                    Expected SQL: authors join countries by country_id.
+                    Service flow: AuthorService.demoJoinFetchToOne() fetches Authors with Country in one query and maps to AuthorCountryDto inside the transaction.
 
-                    Backend execution flow: Hibernate loads Author and Country in one SQL result.
+                    Result DTO: AuthorCountryDto with id, name, and country. It does not include books or awards.
 
-                    Why good: to-one joins keep one row per Author, so row count stays stable.
+                    Why this is safe: a to-one join does not multiply Author rows, so SQL row volume stays close to the number of Authors.
 
-                    Expected performance impact: avoids lazy country queries with little row expansion.
-
-                    Memory / CPU implications: low because no collection duplication occurs.
-
-                    Production recommendation: safe and common when the API needs the to-one data.
+                    Expected behavior: no lazy SQL for country during serialization because the response contains DTOs, not JPA entities.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "To-one JOIN FETCH metrics")
+            responses = @ApiResponse(responseCode = "200", description = "To-one Join Fetch metrics and AuthorCountryDto preview")
     )
     @GetMapping("/join-fetch/country")
     public Response<List<AuthorCountryDto>> getAuthorsWithJoinFetchedCountry() {
         return authorService.demoJoinFetchToOne();
     }
 
-    @Tag(name = "JOIN FETCH")
+    @Tag(name =  "Join Fetch without Pagination")
     @Operation(
-            summary = "JOIN FETCH one collection",
+            summary = "Join Fetch Books",
             description = """
-                    Title: JOIN FETCH Author -> Books (GOOD WHEN CONTROLLED)
+                    Scenario: JOIN_FETCH_BOOKS
 
-                    Purpose: Show single-query loading of one to-many collection.
+                    Purpose: Remove the lazy Books N+1 problem by fetching one collection with the root Authors.
 
-                    JPQL: select distinct a from Author a join fetch a.books order by a.id
+                    Repository query: select distinct a from Author a Join Fetch a.books order by a.id
 
-                    Expected SQL: authors join books, returning one SQL row per Author-Book pair.
+                    Service flow: AuthorService.demoJoinFetchBooks() fetches Authors and Books together, then maps to AuthorBooksDto inside the transaction.
 
-                    Backend execution flow: database returns joined rows; Hibernate hydrates Books and de-duplicates Authors.
+                    Result DTO: AuthorBooksDto with id, name, and books. It must not contain country or awards.
 
-                    Why good: removes N+1 when the API needs Authors with Books.
+                    Tradeoff: SQL statement count is low, but the database still returns approximately one joined row per Author-Book pair. This can be large even when only one SQL statement is executed.
 
-                    Expected performance impact: fewer SQL round trips but larger result set.
-
-                    Memory / CPU implications: grows with number of Books loaded.
-
-                    Production recommendation: use for detail screens or small/medium result sets.
+                    Metrics: estimatedDatabaseRows is based on the number of Book DTOs across the full result, not on the 5-item response preview.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "One collection JOIN FETCH metrics")
+            responses = @ApiResponse(responseCode = "200", description = "One-collection Join Fetch metrics and AuthorBooksDto preview")
     )
     @GetMapping("/join-fetch/book")
     public Response<List<AuthorBooksDto>> getAuthorsWithJoinFetchedBooks() {
         return authorService.demoJoinFetchBooks();
     }
 
-    @Tag(name = "JOIN FETCH")
+    @Tag(name = "Join Fetch without Pagination")
     @Operation(
-            summary = "Multiple collection JOIN FETCH",
+            summary = "Join Fetch Books and Awards, Cartesian failure demo",
             description = """
-                    Title: Multiple Collection JOIN FETCH (BAD)
+                    Scenario: JOIN_FETCH_CARTESIAN
 
-                    Purpose: Demonstrate Cartesian product style row explosion.
+                    Purpose: Demonstrate the dangerous multiple-collection Join Fetch shape: Author.books plus Author.awards.
 
-                    JPQL: select distinct a from Author a join fetch a.books join fetch a.awards order by a.id
+                    Repository query: select distinct a from Author a Join Fetch a.books Join Fetch a.awards order by a.id
 
-                    Expected SQL: authors join books join awards.
+                    Service flow: AuthorService.demoCartesianProduct() attempts to fetch Authors, Books, and Awards in one query, then map to AuthorBooksAwardsDto.
 
-                    Backend execution flow: for each Author, every Book row is combined with every Award row.
+                    Result DTO if it completes: AuthorBooksAwardsDto with id, name, books, and awards. It does not include country.
 
-                    Why bad: 20 Books and 10 Awards become 200 SQL rows per Author.
+                    Important current behavior: this endpoint is expected to overload memory under the configured demo resource limits. The practical result of the request can be OutOfMemoryError instead of a usable benchmark response.
 
-                    Expected performance impact: high network transfer and Hibernate hydration cost.
+                    Why it fails: for each Author, every Book row is combined with every Award row. For example, 20 Books x 10 Awards becomes 200 joined rows for one Author before Hibernate de-duplicates the root Author objects.
 
-                    Memory / CPU implications: large persistence context work, duplicate parent data in SQL rows, possible OOM on large datasets.
-
-                    Production recommendation: do not fetch multiple to-many collections in one query; split queries or return a DTO read model.
+                    How to read the failure: an OutOfMemoryError is the demonstration. It means one SQL statement created a result set too large for the configured JVM heap to hydrate and assemble.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "Cartesian product metrics")
+            responses = @ApiResponse(responseCode = "200", description = "May return metrics if it completes; commonly fails with OutOfMemoryError under demo limits")
     )
     @GetMapping("/join-fetch/book-and-award")
     public Response<List<AuthorBooksAwardsDto>> getAuthorsWithJoinFetchedBooksAndAwards() {
         return authorService.demoCartesianProduct();
     }
+
     @Tag(name = "Baseline")
-    @GetMapping("/pagination/n-plus-one/book")
     @Operation(
-            summary = "Pagination with Author then fetch books")
+            summary = "Pagination N+1 Books",
+            description = """
+                    Scenario: PAGINATION_N_PLUS_ONE_BOOK
+
+                    Purpose: Show that pagination limits the number of root Authors, but lazy collection access can still create N+1 behavior inside the page.
+
+                    Service flow: AuthorService.demoPaginationNPlusOne() loads a Page<Author>, then maps the page content to AuthorBooksDto inside the transaction. The mapper intentionally calls author.getBooks().
+
+                    Result DTO: AuthorBooksDto with id, name, and books.
+
+                    Expected behavior: Spring Data runs the page content query and count query, then Hibernate initializes Books for Authors in the returned page.
+
+                    Metrics: estimatedDatabaseRows is page Authors plus Books loaded for that page.
+                    """,
+            responses = @ApiResponse(responseCode = "200", description = "Paged N+1 Books metrics")
+    )
+    @GetMapping("/pagination/n-plus-one/book")
     public Response<List<AuthorBooksDto>> demoPaginationNPlusOne(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size
     ) {
         return authorService.demoPaginationNPlusOne(page, size);
     }
+
     @Tag(name = "Pagination")
     @Operation(
-            summary = "Pagination with to-one JOIN FETCH",
+            summary = "Pagination Join Fetch Country",
             description = """
-                    Title: Pagination with To-One JOIN FETCH (GOOD)
+                    Scenario: PAGINATION_TO_ONE
 
-                    Purpose: Prove SQL limit/offset still works with ManyToOne JOIN FETCH.
+                    Purpose: Show the safe pagination case for a to-one Join Fetch.
 
-                    JPQL: select a from Author a join fetch a.country order by a.id
+                    Repository query: select a from Author a Join Fetch a.country order by a.id
 
-                    Expected SQL: authors join countries with limit/offset.
+                    Service flow: AuthorService.demoPaginationToOne() loads a Page<Author> with Country fetched, then maps to AuthorCountryDto.
 
-                    Backend execution flow: database applies pagination to stable Author rows.
+                    Result DTO: AuthorCountryDto with id, name, and country. It does not contain books or awards.
 
-                    Why good: Country does not multiply Author rows.
+                    Why this is safe: joining a to-one association does not multiply Author rows, so SQL limit and offset remain meaningful.
 
-                    Expected performance impact: predictable page query.
-
-                    Memory / CPU implications: bounded by requested page size.
-
-                    Production recommendation: safe pagination pattern for to-one data.
+                    Metrics: estimatedDatabaseRows is the number of Authors in the returned page preview source.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "Good pagination metrics")
+            responses = @ApiResponse(responseCode = "200", description = "Safe to-one pagination metrics")
     )
     @GetMapping("/pagination/join-fetch/country")
     public Response<List<AuthorCountryDto>> demoPaginationToOne(
@@ -237,29 +245,25 @@ public class AuthorController {
 
     @Tag(name = "Pagination")
     @Operation(
-            summary = "Pagination with collection JOIN FETCH",
+            summary = "Pagination Join Fetch Books, Hibernate in-memory pagination demo",
             description = """
-                    Title: Pagination with Collection JOIN FETCH (BAD)
+                    Scenario: PAGINATION_COLLECTION_JOIN_FETCH
 
-                    Purpose: Demonstrate why Pageable should not be combined directly with @OneToMany JOIN FETCH.
+                    Purpose: Demonstrate why Pageable should not be applied directly to a collection Join Fetch.
 
-                    JPQL: select distinct a from Author a join fetch a.books order by a.id
+                    Repository query: select distinct a from Author a Join Fetch a.books order by a.id
 
-                    Expected SQL: Hibernate may fetch all Author-Book joined rows without SQL limit/offset.
+                    Service flow: AuthorService.demoPaginationBooksBad() calls the pageable repository method, maps returned Authors to AuthorBooksDto, and estimates processed rows from Hibernate entity load statistics.
 
-                    Hibernate behavior: detects collection fetch plus pagination, logs HHH90003004, and applies pagination in memory.
+                    Result DTO: AuthorBooksDto with id, name, and books.
 
-                    Backend execution flow: fetch joined rows, hydrate entities, de-duplicate Authors, then keep only the requested page.
+                    Why this is bad: Hibernate may fetch a large Author-Book joined result, de-duplicate Authors, and apply pagination in memory. The response page can look small while the database and Hibernate processed much more data.
 
-                    Why bad: database, JDBC, network, and Hibernate may process far more rows than the page needs.
+                    Warning to look for: HHH90003004: firstResult/maxResults specified with collection fetch; applying in memory.
 
-                    Expected performance impact: slow response for large tables.
-
-                    Memory / CPU implications: large memory usage, high CPU, possible OOM.
-
-                    Production recommendation: use /demo/pagination/safe.
+                    Recommendation: use the two-step pagination endpoint instead.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "Bad pagination metrics")
+            responses = @ApiResponse(responseCode = "200", description = "Collection fetch join pagination metrics")
     )
     @GetMapping("/pagination/join-fetch/book")
     public Response<List<AuthorBooksDto>> demoPaginationBooksBad(
@@ -271,29 +275,25 @@ public class AuthorController {
 
     @Tag(name = "Pagination")
     @Operation(
-            summary = "Safe pagination strategy",
+            summary = "Two-step Pagination Books",
             description = """
-                    Title: Safe Pagination with Two-Step Query (GOOD)
+                    Scenario: SAFE_PAGINATION_TWO_STEP
 
-                    Purpose: Demonstrate production-friendly pagination for Authors with Books.
+                    Purpose: Demonstrate a safer pattern for paginating Authors with Books.
 
-                    JPQL step 1: select a.id from Author a order by a.id
+                    Step 1 query: select a.id from Author a order by a.id
 
-                    JPQL step 2: select distinct a from Author a join fetch a.country join fetch a.books where a.id in :ids
+                    Step 2 query: select distinct a from Author a Join Fetch a.books where a.id in :ids order by a.id
 
-                    Expected SQL: first query uses limit/offset on authors only; second query fetches associations for that small ID list.
+                    Service flow: AuthorService.demoSafePagination() pages stable Author IDs first, then fetches Books only for those IDs, then maps to AuthorBooksDto.
 
-                    Backend execution flow: page parent IDs, then fetch the requested page's graph.
+                    Result DTO: AuthorBooksDto with id, name, and books.
 
-                    Why good: collection fetch is bounded to the page.
+                    Why this is better: SQL row volume is bounded by the requested page of Author IDs, not by all joined Author-Book rows in the table.
 
-                    Expected performance impact: two queries, but stable memory and predictable page size.
-
-                    Memory / CPU implications: bounded by page size and books in that page.
-
-                    Production recommendation: prefer this over collection JOIN FETCH with Pageable.
+                    Metrics: estimatedDatabaseRows is page IDs plus Books for those Authors.
                     """,
-            responses = @ApiResponse(responseCode = "200", description = "Safe pagination metrics")
+            responses = @ApiResponse(responseCode = "200", description = "Two-step pagination metrics")
     )
     @GetMapping("/pagination/two-step/book")
     public Response<List<AuthorBooksDto>> demoSafePagination(
@@ -302,5 +302,37 @@ public class AuthorController {
     ) {
         return authorService.demoSafePagination(page, size);
     }
-}
 
+    @Tag(name = "Pagination")
+    @Operation(
+            summary = "Self-defined Pagination Books, SQL vs JPQL failure cases",
+            description = """
+                    Scenario: MANUAL_DEFINED_JOIN_FETCH_PAGINATION
+
+                    Purpose: Demonstrate why manually adding limit/offset to a fetch-style pagination query is not a safe replacement for two-step pagination.
+
+                    Endpoint parameter: queryType controls the implementation. Use queryType=SQL for the native SQL version. Any other value uses the JPQL version.
+
+                    SQL case: AuthorService.demoSelfDefinedJoinFetchPaginationSQL() calls a native query that joins authors and books and applies limit/offset to joined SQL rows. This can produce an incorrect Author response because pagination is applied to rows, not Authors. In the current demo data, the response can contain only 1 Author in the list even when size is larger, because the limited joined rows may all belong to the same Author.
+
+                    JPQL case: AuthorService.demoSelfDefinedJoinFetchPaginationJPQL() attempts to use limit/offset syntax in a JPQL query. This currently fails with: org.hibernate.query.UnknownParameterException: Could not resolve jakarta.persistence.Parameter 'SqmNamedParameter(noItem)' to org.hibernate.query.QueryParameter
+
+                    Result DTO if the SQL case completes: AuthorBooksDto with id, name, and books. The result is intentionally not trustworthy as a correct Author page.
+
+                    Recommendation: use /demos/authors/pagination/two-step/book for a bounded and correct Author page with Books.
+                    """,
+            responses = @ApiResponse(responseCode = "200", description = "Manual pagination demo; SQL can return incorrect Author page, JPQL currently throws UnknownParameterException")
+    )
+    @GetMapping("/pagination/self-defined/book")
+    public Response<List<AuthorBooksDto>> demoSelfDefinedJoinFetchPagination(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "SQL") String queryType
+    ) {
+        if (queryType.equalsIgnoreCase("SQL")) {
+            return authorService.demoSelfDefinedJoinFetchPaginationSQL(page, size);
+        } else {
+            return authorService.demoSelfDefinedJoinFetchPaginationJPQL(page, size);
+        }
+    }
+}
