@@ -2,7 +2,6 @@ spring:
   application:
     name: 02-entity-graph
   main:
-    web-application-type: none
     banner-mode: off
   datasource:
     url: jdbc:h2:mem:testdb
@@ -10,12 +9,27 @@ spring:
     username: sa
     password:
   jpa:
+    open-in-view: false
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: create-drop
     properties:
       hibernate:
         format_sql: true
+        query:
+          fail_on_pagination_over_collection_fetch: false
+
+demo:
+  mode: core
+  auto-run: false
+
+server:
+  port: 8082
+
+springdoc:
+  swagger-ui:
+    operations-sorter: method
+    tags-sorter: alpha
 
 logging:
   level:
