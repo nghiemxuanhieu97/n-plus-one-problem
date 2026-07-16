@@ -6,23 +6,31 @@ spring:
     banner-mode: off
 
   datasource:
-#    url: ${DB_URL:jdbc:mysql://127.0.0.1:3306/assessment_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
-    url: ${DB_URL:jdbc:p6spy:mysql://127.0.0.1:3306/assessment_service?createDatabaseIfNotExist=true&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC}
-    username: ${DB_USERNAME:root}
-    password: ${DB_PASSWORD:password}
-#    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:p6spy:h2:mem:testdb;DB_CLOSE_DELAY=-1;MODE=MYSQL
+    username: sa
+    password:
     driver-class-name: com.p6spy.engine.spy.P6SpyDriver
+
   jpa:
     open-in-view: false
-    database-platform: org.hibernate.dialect.MySQLDialect
+    database-platform: org.hibernate.dialect.H2Dialect
+
     hibernate:
       ddl-auto: create-drop
+
     properties:
       hibernate:
         format_sql: true
         generate_statistics: true
         query:
           fail_on_pagination_over_collection_fetch: false
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: false
 
 demo:
   large-dataset: false
@@ -34,3 +42,4 @@ logging:
     org.hibernate.orm.query: WARN
     org.springframework: WARN
     com.example: INFO
+    p6spy: INFO

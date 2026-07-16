@@ -1,9 +1,6 @@
 package com.example.joinfetch.controller;
 
-import com.example.joinfetch.dto.AuthorBasicDto;
-import com.example.joinfetch.dto.AuthorBooksAwardsDto;
-import com.example.joinfetch.dto.AuthorBooksDto;
-import com.example.joinfetch.dto.AuthorCountryDto;
+import com.example.joinfetch.dto.*;
 import com.example.joinfetch.dto.record.Response;
 import com.example.joinfetch.service.AuthorService;
 import io.swagger.v3.oas.annotations.OpenAPIDefinition;
@@ -187,6 +184,31 @@ public class AuthorController {
     @GetMapping("/join-fetch/book-and-award")
     public Response<List<AuthorBooksAwardsDto>> getAuthorsWithJoinFetchedBooksAndAwards() {
         return authorService.demoCartesianProduct();
+    }
+
+    @Tag(name = "Join Fetch without Pagination")
+    @Operation(
+            summary = "Join Fetch Review and Awards, MultipleBagFetchException failure demo",
+            description = """
+                    Scenario: JOIN_FETCH_MultipleBagFetchException
+
+                    Purpose: Demonstrate the dangerous multiple-collection Join Fetch shape: Author.reviews plus Author.awards.
+                    With the reviews and awards are stored as List collection, this would cause the MultipleBagFetchException
+
+                    Repository query: select distinct a from Author a Join Fetch a.reviews Join Fetch a.awards order by a.id
+
+                    Service flow: AuthorService.demoCartesianProduct() attempts to fetch Authors, Reviews, and Awards in one query.
+    
+                    Service throw MultipleBagFetchException.
+                    Why it fails: for each Author, every Review row is combined with every Award row. For example, 20 Reviews x 10 Awards becomes 200 joined rows and they are both List without any indexes or sign for Hibernate to define which one is duplicated by join fetch Author objects.
+                    Hibernate won't try to solve this duplication but throw error to stop the process, do not make the wrong move.
+
+                    """,
+            responses = @ApiResponse(responseCode = "200", description = "May return metrics if it completes; commonly fails with OutOfMemoryError under demo limits")
+    )
+    @GetMapping("/join-fetch/review-and-award")
+    public Response<List<AuthorReviewAwardsDto>> findAuthorWithReviewWithAwards() {
+        return authorService.findAuthorWithReviewWithAwards();
     }
 
     @Tag(name = "Baseline")

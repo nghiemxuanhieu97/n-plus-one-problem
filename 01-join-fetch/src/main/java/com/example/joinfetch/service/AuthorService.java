@@ -1,9 +1,6 @@
 package com.example.joinfetch.service;
 
-import com.example.joinfetch.dto.AuthorBasicDto;
-import com.example.joinfetch.dto.AuthorBooksAwardsDto;
-import com.example.joinfetch.dto.AuthorBooksDto;
-import com.example.joinfetch.dto.AuthorCountryDto;
+import com.example.joinfetch.dto.*;
 import com.example.joinfetch.dto.record.Response;
 import com.example.joinfetch.entity.Author;
 import com.example.joinfetch.repository.AuthorRepository;
@@ -122,6 +119,19 @@ public class AuthorService {
                 .findAllWithBooksAndAwardsJoinFetch()
                 .stream()
                 .map(AuthorBooksAwardsDto::fromEntity)
+                .toList();
+
+        return Response.payload(result.stream().limit(5).toList(), estimateCartesianRowsAuthorBookReview(result));
+    }
+
+
+    @BenchmarkScenario("JOIN_FETCH_CARTESIAN")
+    @Transactional(readOnly = true)
+    public Response<List<AuthorReviewAwardsDto>> findAuthorWithReviewWithAwards() {
+        List<AuthorReviewAwardsDto> result = authorRepository
+                .findAuthorWithReviewWithAwards()
+                .stream()
+                .map(AuthorReviewAwardsDto::fromEntity)
                 .toList();
 
         return Response.payload(result.stream().limit(5).toList(), estimateCartesianRows(result));
@@ -254,10 +264,18 @@ public class AuthorService {
      * Estimate for an INNER JOIN FETCH of Books and Awards. This is not a JDBC
      * ResultSet row counter.
      */
-    private long estimateCartesianRows(List<AuthorBooksAwardsDto> authors) {
+    private long estimateCartesianRowsAuthorBookReview(List<AuthorBooksAwardsDto> authors) {
         return authors.stream()
                 .mapToLong(author ->
                         (long) author.books().size() * author.awards().size()
+                )
+                .sum();
+    }
+
+    private long estimateCartesianRows(List<AuthorReviewAwardsDto> authors) {
+        return authors.stream()
+                .mapToLong(author ->
+                        (long) author.reviews().size() * author.awards().size()
                 )
                 .sum();
     }

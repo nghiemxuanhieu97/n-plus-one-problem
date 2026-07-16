@@ -66,6 +66,15 @@ public interface AuthorRepository extends JpaRepository<Author, Long> {
             """)
     List<Author> findAllWithBooksAndAwardsJoinFetch();
 
+    @Query("""
+            select distinct a
+            from Author a
+            join fetch a.reviews
+            join fetch a.awards
+            order by a.id
+            """)
+    List<Author> findAuthorWithReviewWithAwards();
+
     // BAD: collection JOIN FETCH with Pageable triggers in-memory pagination in Hibernate.
     // Production recommendation: page parent IDs first, then fetch associations by those IDs.
     @Query(
