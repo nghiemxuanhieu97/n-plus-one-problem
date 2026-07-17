@@ -34,7 +34,7 @@ public class AuthorService {
         log.info("+--------------------------------------------------+");
 
         demoMetrics.measure("baseline N+1: findAll() + lazy getBooks()", () -> {
-            List<Author> authors = authorRepository.findAllForNPlusOneBaseline();
+            List<Author> authors = authorRepository.findAll();
             for (Author author : authors) {
                 log.info("  [{}] {} -> {} books", author.getId(), author.getName(), author.getBooks().size());
             }
