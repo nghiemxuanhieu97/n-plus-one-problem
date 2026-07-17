@@ -29,43 +29,40 @@ public class DataInitializer implements CommandLineRunner {
         Publisher classicHouse = Publisher.builder().name("Classic House").build();
         Publisher fantasyPress = Publisher.builder().name("Fantasy Press").build();
         Publisher historyPress = Publisher.builder().name("History Press").build();
-        publisherRepository.saveAll(List.of(classicHouse, fantasyPress, historyPress));
+        Publisher modernLibrary = Publisher.builder().name("Modern Library").build();
+        Publisher worldBooks = Publisher.builder().name("World Books").build();
+        List<Publisher> publishers = List.of(
+                classicHouse, fantasyPress, historyPress, modernLibrary, worldBooks
+        );
+        publisherRepository.saveAll(publishers);
 
-        Author tolkien = Author.builder().name("J.R.R. Tolkien").build();
-        addBook(tolkien, "The Hobbit", 1937, fantasyPress);
-        addBook(tolkien, "The Fellowship of the Ring", 1954, fantasyPress);
-        addBook(tolkien, "The Two Towers", 1954, fantasyPress);
+        List<String> authorNames = List.of(
+                "J.R.R. Tolkien", "J.K. Rowling", "George R.R. Martin", "George Orwell",
+                "Alexandre Dumas", "Jane Austen", "Virginia Woolf", "Ernest Hemingway",
+                "Mark Twain", "Agatha Christie", "Haruki Murakami", "Toni Morrison"
+        );
 
-        Author rowling = Author.builder().name("J.K. Rowling").build();
-        addBook(rowling, "Harry Potter and the Philosopher's Stone", 1997, fantasyPress);
-        addBook(rowling, "Harry Potter and the Chamber of Secrets", 1998, fantasyPress);
-        addBook(rowling, "Harry Potter and the Prisoner of Azkaban", 1999, fantasyPress);
+        List<Author> authors = new java.util.ArrayList<>();
+        for (int index = 0; index < authorNames.size(); index++) {
+            Author author = Author.builder().name(authorNames.get(index)).build();
+            Publisher publisher = publishers.get(index % publishers.size());
+            addBook(author, "Book " + (index + 1) + "A", 1900 + index, publisher);
+            addBook(author, "Book " + (index + 1) + "B", 1950 + index, publisher);
+            authors.add(author);
+        }
 
-        Author martin = Author.builder().name("George R.R. Martin").build();
-        addBook(martin, "A Game of Thrones", 1996, fantasyPress);
-        addBook(martin, "A Clash of Kings", 1998, fantasyPress);
-        addBook(martin, "A Storm of Swords", 2000, fantasyPress);
-
-        Author orwell = Author.builder().name("George Orwell").build();
-        addBook(orwell, "Animal Farm", 1945, classicHouse);
-        addBook(orwell, "Nineteen Eighty-Four", 1949, classicHouse);
-        addBook(orwell, "Homage to Catalonia", 1938, historyPress);
-
-        Author dumas = Author.builder().name("Alexandre Dumas").build();
-        addBook(dumas, "The Three Musketeers", 1844, classicHouse);
-        addBook(dumas, "The Count of Monte Cristo", 1844, classicHouse);
-        addBook(dumas, "Twenty Years After", 1845, classicHouse);
-
-        authorRepository.saveAll(List.of(tolkien, rowling, martin, orwell, dumas));
-        log.info("Data initialized: 5 authors, 15 books, 3 publishers");
+        authorRepository.saveAll(authors);
+        log.info("Data initialized: 12 authors, 24 books, 5 publishers");
     }
 
     private void addBook(Author author, String title, int publishYear, Publisher publisher) {
-        author.getBooks().add(Book.builder()
+        Book book = Book.builder()
                 .title(title)
                 .publishYear(publishYear)
                 .author(author)
                 .publisher(publisher)
-                .build());
+                .build();
+        author.getBooks().add(book);
+        publisher.getBooks().add(book);
     }
 }

@@ -2,7 +2,6 @@ spring:
   application:
     name: 04-batch-size
   main:
-    web-application-type: none
     banner-mode: off
   datasource:
     url: jdbc:h2:mem:testdb
@@ -10,13 +9,24 @@ spring:
     username: sa
     password:
   jpa:
+    open-in-view: false
     database-platform: org.hibernate.dialect.H2Dialect
     hibernate:
       ddl-auto: create-drop
     properties:
       hibernate:
         format_sql: true
-        default_batch_fetch_size: 5
+
+demo:
+  auto-run: false
+
+server:
+  port: 8084
+
+springdoc:
+  swagger-ui:
+    operations-sorter: method
+    tags-sorter: alpha
 
 logging:
   level:
