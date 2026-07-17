@@ -4,9 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 @Entity
 @Table(name = "authors")
@@ -38,7 +36,8 @@ public class Author {
     @Builder.Default
     private List<Award> awards = new ArrayList<>();
 
-    @Lob
-    @Column(columnDefinition = "LONGTEXT")
-    private String biography;
+
+    @OneToMany(mappedBy = "author", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+    @Builder.Default
+    private List<Review> reviews = new ArrayList<>();
 }

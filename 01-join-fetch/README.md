@@ -80,7 +80,7 @@ Important settings:
 ```yaml
 spring:
   datasource:
-    url: jdbc:p6spy:mysql://127.0.0.1:3306/assessment_service?...
+    url: jdbc:p6spy:h2:mem:test_db;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
     driver-class-name: com.p6spy.engine.spy.P6SpyDriver
   jpa:
     open-in-view: false
@@ -130,8 +130,6 @@ Windows PowerShell:
 ```powershell
 .\gradlew.bat :01-join-fetch:bootRun
 ```
-
-The app expects MySQL by default. Override `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` if needed.
 
 ## Active Controller
 
@@ -565,11 +563,12 @@ How to read the failure: an OutOfMemoryError is the demonstration. It means one 
 ```
 
 **Case value:** low query count can be misleading. One SQL statement can still create a Cartesian row explosion and exhaust heap.
+In this case I add the column biography with each Award has a value of 1000000 characters D then when the number of rows exploded, the column description is multiplied that make the ResultSet is really large that exhaust heap
 
 **Expected result under demo limits:**
 
 ```text
-OutOfMemoryError
+java.lang.OutOfMemoryError: Java heap space
 ```
 
 If the request completes on a larger heap, the response shape would be:
@@ -738,6 +737,10 @@ Warning to look for: HHH90003004: firstResult/maxResults specified with collecti
 
 Recommendation: use the two-step pagination endpoint instead.
 ```
+**Log**
+``2026-07-16T10:38:36.834+07:00  WARN 14136 --- [01-join-fetch] [nio-8080-exec-6] org.hibernate.orm.query                  : HHH90003004: firstResult/maxResults specified with collection fetch; applying in memory``
+
+-> indicates that the filter is applied in the memory of service instead of in database 
 
 **Case value:** the response page is small, but Hibernate can load and de-duplicate a much larger joined result before applying pagination in memory.
 
@@ -950,7 +953,7 @@ For multiple to-many `JOIN FETCH` scenarios, query count can look excellent whil
 
 | Concept | Explanation |
 | --- | --- |
-| Bag | A `List` collection without an index column such as `@OrderColumn`. |
+| Bag | A collection is not unique without an index column. |
 | Problem | A joined SQL result can repeat the same child row many times. |
 | Hibernate concern | Without an index, Hibernate cannot know whether repeated rows are real duplicates or duplicates created by the join. |
 | Result | Hibernate can stop the query and throw `MultipleBagFetchException`. |
@@ -969,7 +972,7 @@ Example domain data:
 
 ```text
 Author 1
-books  = [Book 1, Book 2]
+Reviews  = [Review 1, Review 2]
 awards = [Award 1, Award 2, Award 3]
 ```
 
@@ -978,22 +981,22 @@ If both collections are fetched with joins:
 ```jpql
 select distinct a
 from Author a
-left join fetch a.books
+left join fetch a.Reviews
 left join fetch a.awards
 ```
 
 The database result is multiplied:
 
-| Author | Book | Award |
+| Author | Review | Award |
 | --- | --- | --- |
-| Author 1 | Book 1 | Award 1 |
-| Author 1 | Book 1 | Award 2 |
-| Author 1 | Book 1 | Award 3 |
-| Author 1 | Book 2 | Award 1 |
-| Author 1 | Book 2 | Award 2 |
-| Author 1 | Book 2 | Award 3 |
+| Author 1 | Review 1 | Award 1 |
+| Author 1 | Review 1 | Award 2 |
+| Author 1 | Review 1 | Award 3 |
+| Author 1 | Review 2 | Award 1 |
+| Author 1 | Review 2 | Award 2 |
+| Author 1 | Review 2 | Award 3 |
 
-Now each `Book` appears three times, and each `Award` appears two times.
+Now each `Review` appears three times, and each `Award` appears two times.
 
 Hibernate cannot safely decide whether a repeated child row is:
 
@@ -1002,7 +1005,7 @@ Hibernate cannot safely decide whether a repeated child row is:
 
 That ambiguity is why Hibernate may reject the query with `MultipleBagFetchException`.
 
-### Tag 03 - How `@OrderColumn` Changes `books`
+### Tag 03 - How `@OrderColumn` Changes `books` (still using List but not cause `MultipleBagFetchException`)
 
 In this project, `books` is not a plain bag because it has an index column:
 
@@ -1028,3 +1031,42 @@ private List<Book> books = new ArrayList<>();
 | 2 | 22 | 1 | Author 2 - Book 2 |
 
 The index starts from `0` for each Author because `book_order` stores the position of a Book inside that Author's `books` list.
+
+### Tag 04 - How `Set` Can Also Prevent `MultipleBagFetchException`
+
+Another common way to avoid `MultipleBagFetchException` is to map one of the collections as a `Set` instead of a plain `List` bag.
+
+A `Set` is not treated as a Hibernate bag because it represents a collection of unique elements, not an unordered list that may contain duplicates. That gives Hibernate a different collection model and avoids the specific rule: **do not fetch multiple bags in one query**.
+
+Example mapping:
+
+```java
+@OneToMany(mappedBy = "author", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
+@Builder.Default
+private Set<Award> awards = new LinkedHashSet<>();
+```
+
+With this shape, a query that fetches `books` and `awards` together is no longer fetching two bag collections if `books` is indexed with `@OrderColumn` or if `awards` is a `Set`:
+
+```jpql
+select distinct a
+from Author a
+join fetch a.books
+join fetch a.awards
+order by a.id
+```
+
+| Collection Shape | Bag? | Effect on `MultipleBagFetchException` |
+| --- | --- | --- |
+| `List<Book>` without `@OrderColumn` | Yes | Can contribute to `MultipleBagFetchException`. |
+| `List<Book>` with `@OrderColumn` | No | Indexed list, so it is not a plain bag. |
+| `Set<Award>` | No | Set collection, so it is not a bag. |
+
+Important distinction:
+
+```text
+Set can prevent MultipleBagFetchException.
+Set does not prevent Cartesian row multiplication.
+```
+
+So `Set` helps Hibernate accept the query, but the SQL result can still be large because every fetched child collection is still joined into the same row set. In this benchmark, that means the Cartesian/OOM lesson still matters even when the mapping avoids the multiple-bag exception.
