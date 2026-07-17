@@ -3,9 +3,7 @@ package com.example.joinfetch.dto;
 import com.example.joinfetch.entity.Author;
 import com.example.joinfetch.entity.Book;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 public record AuthorBooksDto(
         Long id,
@@ -20,7 +18,7 @@ public record AuthorBooksDto(
         );
     }
 
-    private static List<BookDto> uniqueBooks(List<Book> books) {
+    private static List<BookDto> uniqueBooks(Collection<Book> books) {
         Map<Long, BookDto> result = new LinkedHashMap<>();
         for (Book book : books) {
             result.putIfAbsent(book.getId(), BookDto.fromEntity(book));
