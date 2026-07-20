@@ -13,11 +13,6 @@ import java.util.Optional;
 
 public interface AuthorRepository extends JpaRepository<Author, Long> {
 
-    // A minimal FETCH graph suppresses the intentionally EAGER country for a clean books-only N+1 baseline.
-    @EntityGraph(attributePaths = "name", type = EntityGraph.EntityGraphType.FETCH)
-    @Query("SELECT a FROM Author a ORDER BY a.id")
-    List<Author> findAllForNPlusOneBaseline();
-
     @Override
     @EntityGraph("Author.withBooks")
     Optional<Author> findById(Long id);

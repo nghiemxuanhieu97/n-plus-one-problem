@@ -1,645 +1,216 @@
 # Module 02: JPA EntityGraph
 
-Module này giải thích cách giải quyết N+1 bằng `EntityGraph`, nhưng mục tiêu quan trọng hơn là hiểu toàn bộ đường đi:
+Mục tiêu:
 
 ```text
-HTTP request
-    -> Controller
-    -> Service + transaction
-    -> Spring Data repository / EntityManager
-    -> JPQL/HQL + EntityGraph fetch plan
-    -> Hibernate query model + SQL AST
-    -> SQL + JDBC parameters
-    -> Database result rows
-    -> Hibernate hydration
-    -> Author object graph
-    -> DTO / HTTP response
+EntityGraph giải quyết câu hỏi:
+"Trong use case này, association nào cần được load?"
+
+Nó giúp tránh N+1 mà không phải đổi association thành EAGER toàn cục
+và không bắt buộc nhúng fetch join vào JPQL.
 ```
 
-Tài liệu được viết để người mới có thể đọc từ đầu, sau đó mở Swagger và chạy từng scenario theo đúng thứ tự.
+---
 
-Tài liệu chuyên sâu về toàn bộ query lifecycle:
+## 0. Chuẩn bị demo
 
-- [Từ JPQL đến Database và trở lại Java](JPQL_TO_DATABASE_FLOW.md)
+Khởi động module:
 
-## 1. Điều cần nhớ trước tiên
+```powershell
+.\gradlew.bat :02-entity-graph:bootRun
+```
+
+Mở Swagger:
 
 ```text
-JPQL/query quyết định lấy Author nào.
-EntityGraph quyết định association nào cần được load cùng use case đó.
-Hibernate quyết định SQL cụ thể để thực hiện query và fetch plan.
-Database chỉ hiểu SQL, không hiểu JPQL, HQL hay EntityGraph.
+http://localhost:8082/swagger-ui/index.html
 ```
 
-`EntityGraph` là fetch plan, không phải lời cam kết rằng Hibernate luôn sinh đúng một câu `JOIN`.
-
-## 2. Domain và dữ liệu demo
+Mỗi endpoint:
 
 ```text
-Country   1 -------- N Author
-Author    1 -------- N Book
-Author    1 -------- N Award
-Publisher 1 -------- N Book
+1. Chạy đúng một scenario.
+2. Trả response mô tả kết quả kỳ vọng.
+3. In SQL và block [METRICS] trong console.
 ```
 
-Dữ liệu khởi tạo:
-
-- 5 Authors.
-- 15 Books, mỗi Author có 3 Books.
-- 10 Awards, mỗi Author có 2 Awards.
-- 5 Publishers.
-- 3 Countries.
-
-Các bảng và foreign key chính:
+Dataset:
 
 ```text
-authors.id              primary key
-books.id                primary key
-awards.id               primary key
-countries.id            primary key
-publishers.id           primary key
-
-authors.country_id      -> countries.id
-books.author_id         -> authors.id
-books.publisher_id      -> publishers.id
-awards.author_id        -> authors.id
+5 Authors
+15 Books          = mỗi Author có 3 Books
+10 Awards         = mỗi Author có 2 Awards
+5 Publishers
+3 Countries
 ```
 
-`Author.country` được đặt `EAGER` có chủ đích để scenario `FETCH graph` và `LOAD graph` cho kết quả khác nhau. Đây là thiết kế phục vụ demo, không phải khuyến nghị để mọi `ManyToOne` trong production đều là `EAGER`.
+Relationship chính:
 
-## 3. Primary key, foreign key và relationship
+```text
+Country   1 ----- N Author
+Author    1 ----- N Book
+Publisher 1 ----- N Book
+Author    1 ----- N Award
+```
 
-### 3.1 Primary key
-
-Primary key nhận diện duy nhất một row trong một table:
+Mapping trọng tâm:
 
 ```java
-@Id
-@GeneratedValue(strategy = GenerationType.IDENTITY)
-private Long id;
-```
-
-Database bảo đảm `id` không trùng và không `NULL`. Với `IDENTITY`, database sinh ID khi `INSERT`, sau đó Hibernate gán ID đó trở lại entity Java.
-
-### 3.2 Foreign key
-
-Foreign key là column tham chiếu primary key của table khác. Ví dụ:
-
-```text
-books.author_id = 1
-```
-
-nghĩa là Book thuộc Author có `authors.id = 1`.
-
-Database dùng foreign-key constraint để ngăn dữ liệu như `author_id = 999` khi Author 999 không tồn tại.
-
-### 3.3 Relationship trong JPA
-
-Hai phía của quan hệ Author–Book:
-
-```java
-// Author.java
 @OneToMany(mappedBy = "author", fetch = FetchType.LAZY)
 private List<Book> books;
 ```
 
-```java
-// Book.java
-@ManyToOne(fetch = FetchType.LAZY)
-@JoinColumn(name = "author_id")
-private Author author;
+`Author.books` là `LAZY`: query Authors không mặc định lấy Books.
+
+`Author.country` được cố tình để `EAGER` chỉ nhằm làm demo `FETCH` graph và `LOAD` graph quan sát được. Đây không phải mapping được khuyến nghị cho production.
+
+---
+
+# Part 1 — Problem
+
+## 1. N+1 xuất hiện như thế nào?
+
+Endpoint:
+
+```http
+GET /api/entity-graph/01-baseline-n-plus-one
 ```
 
-`Book.author` là owning side vì nó giữ `@JoinColumn` và quyết định giá trị `books.author_id`.
-
-`Author.books` là inverse side. `mappedBy = "author"` nói rằng relationship đã được quản lý bởi field `Book.author`; Hibernate không cần tạo thêm join table hay foreign key thứ hai.
-
-Khi xây dựng quan hệ hai chiều, phải giữ hai phía đồng bộ:
-
-```java
-author.getBooks().add(book);
-book.setAuthor(author);
-```
-
-Database cuối cùng chỉ lưu foreign key ở `books.author_id`; collection `author.books` là object view mà Hibernate xây dựng từ các rows đó.
-
-### 3.4 Association khác Relationship như thế nào?
-
-Hai từ này thường được dùng thay nhau trong giao tiếp hằng ngày, nhưng có thể phân biệt chính xác hơn:
-
-```text
-Relationship
-= sự thật/mối quan hệ giữa hai khái niệm hoặc hai nhóm dữ liệu.
-
-Association
-= cách object/entity model biểu diễn và cho phép điều hướng relationship đó.
-```
-
-Ví dụ domain có relationship:
-
-```text
-Một Author viết nhiều Books.
-Mỗi Book thuộc một Author.
-```
-
-Ở database, relationship được hiện thực bằng foreign key:
-
-```text
-books.author_id -> authors.id
-```
-
-Ở Java/JPA, relationship được biểu diễn bằng các associations:
+Service:
 
 ```java
-// Association đi từ Author sang Books
-@OneToMany(mappedBy = "author")
-private List<Book> books;
+List<Author> authors = authorRepository.findAll();
 
-// Association đi từ Book sang Author
-@ManyToOne
-@JoinColumn(name = "author_id")
-private Author author;
+for (Author author : authors) {
+    author.getBooks().size();
+}
 ```
 
-Có thể hình dung ba tầng:
+Flow:
 
 ```text
-Domain relationship:
-Author 1 --- N Book
-
-Database representation:
-books.author_id references authors.id
-
-JPA associations:
-Author.books
-Book.author
+Repository query lấy 5 Authors
+  -> Country được load theo mapping EAGER
+  -> Author.books vẫn chưa được load
+  -> vòng lặp chạm books của Author 1
+  -> Hibernate chạy một query Books
+  -> chạm Author 2
+  -> Hibernate chạy thêm một query
+  -> lặp lại cho cả 5 Authors
 ```
 
-`Author.books` và `Book.author` là hai association ends/hướng điều hướng của cùng một relationship Author–Book:
-
-```text
-author.getBooks() -> đi từ Author sang Books
-book.getAuthor()  -> đi từ Book sang Author
-```
-
-Nếu entity chỉ có:
-
-```java
-@ManyToOne
-private Author author;
-```
-
-mà Author không có `List<Book>`, relationship trong database vẫn tồn tại, nhưng object model chỉ có association một chiều:
-
-```text
-Book -> Author       đi được
-Author -> Books      không đi trực tiếp được
-```
-
-Khi có cả hai fields, đây là bidirectional association. `mappedBy` cho Hibernate biết hai hướng này mô tả cùng một foreign-key relationship, không phải hai relationships độc lập.
-
-| Khái niệm | Câu hỏi nó trả lời | Ví dụ |
-|---|---|---|
-| Relationship | Hai loại dữ liệu liên quan với nhau thế nào? | Một Author có nhiều Books |
-| Foreign key | Database lưu/bảo vệ quan hệ bằng gì? | `books.author_id` |
-| Association | Entity/object điều hướng quan hệ bằng field nào? | `Author.books`, `Book.author` |
-| Cardinality | Mỗi phía có bao nhiêu phần tử? | `OneToMany`, `ManyToOne` |
-
-Các thiết lập như `fetch`, `cascade`, owning side và `mappedBy` thuộc về association mapping trong JPA. Chúng hướng dẫn Hibernate cách load và quản lý object relationship; chúng không thay đổi sự thật domain rằng Book thuộc Author.
-
-Cách nhớ ngắn:
-
-```text
-Relationship là mối quan hệ.
-Association là đường nối trong object model để biểu diễn/đi theo mối quan hệ đó.
-Foreign key hoặc join table là cách database lưu đường nối.
-```
-
-## 4. Cascade và orphan removal
-
-`cascade` trả lời câu hỏi:
-
-> Khi một EntityManager operation được thực hiện trên Author, operation đó có lan xuống Books và Awards không?
-
-Các loại cascade chuẩn JPA:
-
-| Loại | Ý nghĩa |
-|---|---|
-| `PERSIST` | Persist cha thì persist con |
-| `MERGE` | Merge cha thì merge con |
-| `REMOVE` | Remove cha thì remove con |
-| `REFRESH` | Refresh cha thì refresh con |
-| `DETACH` | Detach cha thì detach con |
-| `ALL` | Bao gồm tất cả loại trên |
-
-Mapping hiện tại:
-
-```java
-@OneToMany(
-    mappedBy = "author",
-    cascade = CascadeType.ALL,
-    orphanRemoval = true,
-    fetch = FetchType.LAZY
-)
-private List<Book> books;
-```
-
-Khi `authorRepository.save(newAuthor)` được gọi, Spring Data nhận ra entity mới và dùng `EntityManager.persist(author)`. Vì `ALL` bao gồm `PERSIST`, Hibernate tiếp tục persist Books và Awards trong collection:
-
-```text
-persist(author)
-    -> persist(book 1)
-    -> persist(book 2)
-    -> persist(book 3)
-    -> persist(award 1)
-    -> persist(award 2)
-```
-
-Điều này giải thích vì sao `DataInitializer` chỉ cần save Author sau khi đã gắn children đúng hai phía.
-
-Ba khái niệm không được trộn với nhau:
-
-```text
-cascade -> operation persist/merge/remove có lan không
-fetch   -> lúc đọc entity có load association ngay không
-FK      -> database bảo vệ liên kết giữa các tables
-```
-
-`orphanRemoval = true` nghĩa là nếu một managed Book bị loại khỏi `author.books`, Hibernate có thể `DELETE` Book đó khi flush.
-
-`CascadeType.REMOVE` lan thao tác khi xóa Author. Database `ON DELETE CASCADE` là một cơ chế khác, do database thực thi.
-
-## 5. SQL, JPQL, HQL và native SQL
-
-### 5.1 SQL
-
-SQL làm việc trực tiếp với table và column:
+SQL rút gọn:
 
 ```sql
+-- Query 1: lấy Authors
 SELECT a.id, a.name
 FROM authors a
-WHERE a.id > ?
 ORDER BY a.id;
+
+-- Query 2..4: ba Countries được tham chiếu bởi Authors
+SELECT c.* FROM countries c WHERE c.id = 1;
+SELECT c.* FROM countries c WHERE c.id = 2;
+SELECT c.* FROM countries c WHERE c.id = 3;
+
+-- Query 5
+SELECT b.*
+FROM books b
+WHERE b.author_id = 1;
+
+-- Query 6
+SELECT b.*
+FROM books b
+WHERE b.author_id = 2;
+
+-- Query 7, 8, 9 tương tự cho ba Authors còn lại
 ```
-
-H2, PostgreSQL hoặc MySQL hiểu SQL. Database không biết Java entity `Author` là gì.
-
-### 5.2 JPQL
-
-JPQL là Jakarta Persistence Query Language. Nó query entity và Java field:
-
-```jpql
-SELECT a
-FROM Author a
-WHERE a.id > :minId
-ORDER BY a.id
-```
-
-Khác biệt:
-
-```text
-JPQL: Author, a.name, a.books
-SQL:  authors, name, books.author_id
-```
-
-Hibernate đọc mapping:
-
-```java
-@Entity
-@Table(name = "authors")
-class Author { ... }
-```
-
-rồi biết `Author` phải được dịch thành table `authors`.
-
-Database không bao giờ nhận `SELECT a FROM Author a`. Nó nhận SQL do Hibernate tạo.
-
-### 5.3 HQL
-
-HQL là Hibernate Query Language:
-
-```text
-JPQL = ngôn ngữ query entity theo chuẩn Jakarta Persistence.
-HQL  = ngôn ngữ của Hibernate, tương thích phần lớn JPQL và có thêm extension.
-```
-
-Một query đơn giản thường vừa là JPQL hợp lệ vừa là HQL hợp lệ, nên hai thuật ngữ hay được dùng lẫn trong project Hibernate. Nên ưu tiên cú pháp JPQL chuẩn nếu không cần tính năng riêng của Hibernate.
-
-### 5.4 `@Query`, `Query` và `TypedQuery`
-
-`@Query` là annotation Spring Data chứa query:
-
-```java
-@Query("SELECT a FROM Author a WHERE a.id > :minId")
-List<Author> search(@Param("minId") Long minId);
-```
-
-JPA cũng có API runtime:
-
-```java
-TypedQuery<Author> query = entityManager.createQuery(
-    "SELECT a FROM Author a WHERE a.id = :id",
-    Author.class
-);
-```
-
-`TypedQuery<Author>` cho compiler biết result là `Author`. `Query` không mang result type cụ thể.
-
-### 5.5 Native SQL
-
-Nếu dùng:
-
-```java
-@Query(value = "SELECT * FROM authors WHERE id > :minId", nativeQuery = true)
-```
-
-thì developer tự viết SQL. Hibernate không cần dịch `Author` thành `authors`, nhưng vẫn bind parameters, gọi JDBC, đọc result set và map rows về entity/DTO.
-
-### 5.6 Flow dịch query xuống database
-
-```text
-repository method được gọi
-    -> Spring Data đọc @Query hoặc derived-method name
-    -> Hibernate parse JPQL/HQL
-    -> kiểm tra entity và attributes
-    -> kết hợp EntityGraph nếu có
-    -> tạo semantic query model
-    -> tạo SQL AST
-    -> database dialect render SQL
-    -> JDBC gửi SQL và bind parameters
-    -> database chạy SQL
-    -> Hibernate hydrate result rows thành objects
-```
-
-Một JPQL không bắt buộc tương ứng đúng một SQL. Lazy loading, pagination count query, secondary selects và fetch strategy có thể làm phát sinh thêm statements.
-
-## 6. SQL AST là gì?
-
-AST là Abstract Syntax Tree. Hibernate không chỉ thay chuỗi `Author` thành `authors`; nó xây một tree nội bộ gần giống:
-
-```text
-SelectStatement
-    From: authors a
-    LeftJoin: books b
-        Condition: b.author_id = a.id
-    Predicate: a.id > parameter
-    OrderBy: a.id
-    Selections:
-        author columns
-        book columns
-```
-
-Dialect sau đó render SQL AST thành cú pháp phù hợp database, ví dụ `LIMIT/OFFSET`. SQL AST cũng là nơi Hibernate kết hợp query predicates, joins do graph yêu cầu, pagination và column selections.
-
-## 7. Hibernate hydration: từ 15 rows thành object graph
-
-Fetch 5 Authors, mỗi Author có 3 Books, database trả về 15 rows phẳng:
-
-```text
-A1 - B1
-A1 - B2
-A1 - B3
-A2 - B4
-A2 - B5
-A2 - B6
-...
-```
-
-Database không trả một JSON/object tree. Hibernate đọc từng row và dùng Persistence Context như identity map:
-
-```text
-(Author, 1) -> Author object A1
-(Book, 1)   -> Book object B1
-(Book, 2)   -> Book object B2
-```
-
-Khi Author ID 1 lặp lại ở row thứ hai, Hibernate dùng lại đúng A1 thay vì tạo một Author mới. Book ID mới được tạo thành Book object rồi thêm vào collection đúng owner.
 
 Kết quả:
 
 ```text
-15 flat SQL rows
-    -> 5 Author objects
-    -> 15 Book objects
-    -> 5 initialized Author.books collections
+1 query lấy Authors
++ 3 query EAGER Countries
++ 5 query lazy Books
+= 9 JDBC statements
 ```
 
-Quá trình đọc rows, tạo/reuse entity và gắn association này được gọi là hydration/materialization.
-
-## 8. Semantics, Bag và PersistentBag
-
-### 8.1 “Semantics” nghĩa là gì?
-
-Trong tài liệu này, `semantics` có thể hiểu là:
-
-> Ý nghĩa và bộ quy tắc mà Hibernate phải bảo toàn.
-
-Collection semantics trả lời các câu hỏi:
+Metrics:
 
 ```text
-Collection có cho phép duplicate không?
-Collection có persistent index/vị trí không?
-Hai phần tử được xem là giống nhau khi nào?
-Hibernate có được phép loại phần tử lặp không?
+JDBC statements:      9
+entities loaded:      23
+collections loaded:   5
+collections fetched:  5
 ```
 
-| Loại collection | Cho duplicate | Có persistent index |
-|---|---:|---:|
-| Bag | Có | Không |
-| Set | Không | Không |
-| Indexed List | Có | Có |
-
-### 8.2 Bag chính xác là gì?
-
-Bag là collection:
+Giải thích:
 
 ```text
-cho phép duplicate
-nhưng không lưu index/vị trí của từng lần xuất hiện
+entities loaded:
+5 Authors + 3 Countries + 15 Books = 23
+
+collections loaded:
+5 Author.books collections được initialized
+
+collections fetched:
+5 lazy collection fetch events
 ```
 
-Java Collections Framework không có interface `Bag`. Đây là cách Hibernate phân loại mapping.
-
-Mapping hiện tại:
-
-```java
-@OneToMany(mappedBy = "author")
-private List<Book> books;
-```
-
-không có `@OrderColumn`, vì vậy mặc định được Hibernate xử lý với Bag semantics:
+### Tác động
 
 ```text
-Java declaration:       List<Book>
-Hibernate semantics:    BAG
-Runtime wrapper:        PersistentBag
+N+1 không làm dữ liệu sai.
+Nó làm tăng database round-trips.
+
+Số Authors càng lớn:
+1 + N queries càng lớn.
 ```
 
-Không phải Book thiếu ID. Hai khái niệm hoàn toàn khác nhau:
+Ví dụ production:
 
 ```text
-Book.id       -> đây là Book entity nào?
-book_position -> Book nằm ở vị trí nào trong collection?
+Page có 100 Authors
+-> 1 query Authors
+-> có thể thêm 100 query Books
+-> tổng 101 statements
 ```
 
-`Book.id` không làm collection hết là Bag. Muốn có indexed-list semantics, cần lưu vị trí collection:
-
-```java
-@OrderColumn(name = "book_position")
-private List<Book> books;
-```
-
-`@OrderBy("title ASC")` chỉ sort khi đọc; nó không lưu index và không tương đương `@OrderColumn`.
-
-### 8.3 `PersistentBag` là gì?
-
-Trong source code, object mới bắt đầu bằng:
-
-```java
-private List<Book> books = new ArrayList<>();
-```
-
-Khi Author được Hibernate quản lý, Hibernate thường thay collection bằng `PersistentBag`. Wrapper này theo dõi:
-
-- Collection đã initialized chưa.
-- Collection thuộc Author nào.
-- Hibernate Session nào đang quản lý.
-- Snapshot ban đầu để dirty checking.
-- Phần tử nào được thêm hoặc xóa.
-- Có cần sinh `INSERT`, `UPDATE`, `DELETE` khi flush không.
-
-Với Books `LAZY`:
+Vấn đề nằm ở access pattern:
 
 ```text
-find Author
-    -> author.books = PersistentBag(uninitialized)
-
-author.getBooks().size()
-    -> SELECT books WHERE author_id = ?
-    -> PersistentBag(initialized)
+load nhiều parent
+-> truy cập một LAZY association trong vòng lặp
 ```
 
-`Bag` là semantics; `PersistentBag` là implementation runtime Hibernate dùng để quản lý semantics đó.
+### Vì sao có thêm ba Country queries?
 
-## 9. MultipleBagFetchException và row multiplication
-
-### 9.1 Duplicate thật và duplicate do JOIN
-
-Giả sử dữ liệu thật của Author A1:
+`Author.country` đang cố tình mapping `EAGER` để scenario 08 có thể so sánh `FETCH` và `LOAD`.
 
 ```text
-Books  = [B1, B2, B3]
-Awards = [W1, W2]
+Country EAGER:
+3 Countries được load cùng use case.
+
+Books LAZY:
+5 query lặp lại khi vòng lặp truy cập Author.books.
 ```
 
-Join hai ToMany collections sinh Cartesian combinations:
+Ba Country queries không phải N+1 đang được phân tích. Dấu hiệu N+1 chính là năm câu SQL Books có cùng shape nhưng khác `author_id`.
 
-| Author | Book | Award |
-|---|---|---|
-| A1 | B1 | W1 |
-| A1 | B1 | W2 |
-| A1 | B2 | W1 |
-| A1 | B2 | W2 |
-| A1 | B3 | W1 |
-| A1 | B3 | W2 |
+---
 
-Nhìn riêng từng cột:
+# Part 2 — Solution
+
+## 2. EntityGraph là gì?
+
+EntityGraph là một fetch plan:
 
 ```text
-Books:  B1, B1, B2, B2, B3, B3
-Awards: W1, W2, W1, W2, W1, W2
+Query:
+chọn root entities nào.
+
+EntityGraph:
+association nào của root entities phải được initialized.
 ```
-
-Database trả sáu rows, nhưng dữ liệu domain chỉ có ba Books và hai Awards.
-
-### 9.2 Vì sao hai Bags bị chặn?
-
-Nếu mapping là:
-
-```java
-List<Book> books;    // Bag
-List<Award> awards;  // Bag
-```
-
-cả hai collections đều:
-
-- Cho phép duplicate.
-- Không có persistent index.
-- Không cho Hibernate tự ý loại duplicate mà không thay đổi collection semantics.
-
-Hibernate áp dụng quy tắc an toàn tổng quát và từ chối fetch đồng thời hai bags:
-
-```text
-MultipleBagFetchException:
-cannot simultaneously fetch multiple bags
-```
-
-Hibernate biết hai SQL rows chứa cùng `Book.id`; điều nó không có là identity cho từng lần Book xuất hiện trong Bag. Entity identity và collection-membership identity là hai thứ khác nhau.
-
-Với đúng `OneToMany` trong demo, database thực tế không thể lưu cùng một Book row hai lần cho một Author. Tuy nhiên Hibernate vẫn phân loại mapping theo Bag semantics và áp dụng validation tổng quát khi xây fetch plan, thay vì suy luận riêng từ dữ liệu hiện tại.
-
-### 9.3 Vì sao `Set` tránh exception?
-
-Module dùng:
-
-```java
-List<Book> books;   // Bag
-Set<Award> awards;  // Set
-```
-
-Set không cho duplicate:
-
-```java
-awards.add(W1); // thêm
-awards.add(W2); // thêm
-awards.add(W1); // đã có, bỏ qua
-awards.add(W2); // đã có, bỏ qua
-```
-
-Vì chỉ còn một Bag, Hibernate không ném `MultipleBagFetchException`.
-
-Nhưng Set chỉ tránh exception, không tránh Cartesian multiplication. Endpoint hiện tại cho thấy:
-
-```text
-3 distinct Books x 2 Awards = 6 SQL rows/Author
-hydrated List<Book> size     = 6
-```
-
-`Set<Award>` loại Awards lặp, nhưng `List<Book>` vẫn có thể nhận sáu references do join.
-
-Với 5 Authors:
-
-```text
-5 x 3 Books x 2 Awards = 30 joined rows
-```
-
-### 9.4 Cách tái hiện `MultipleBagFetchException`
-
-Tạm đổi:
-
-```java
-private Set<Award> awards = new HashSet<>();
-```
-
-thành:
-
-```java
-private List<Award> awards = new ArrayList<>();
-```
-
-Sau đó restart và gọi:
-
-```http
-GET /api/entity-graph/11-multiple-collections
-```
-
-Graph `Author.withBooksAndAwards` sẽ chứa hai Bags và Hibernate có thể ném exception trước khi gửi SQL. Sau khi quan sát, đổi Awards trở lại `Set` để tiếp tục demo row multiplication.
-
-Không nên đổi List thành Set trong production chỉ để né exception nếu domain thực sự cần thứ tự hoặc duplicate. Các giải pháp khác gồm tách query, BatchSize, subselect fetching hoặc DTO.
-
-## 10. EntityGraph là gì?
-
-EntityGraph mô tả attributes/associations cần được initialized cho một use case cụ thể mà không phải đổi mapping LAZY toàn cục.
 
 Ví dụ:
 
@@ -649,98 +220,263 @@ Ví dụ:
 List<Author> findAllWithDynamicGraph();
 ```
 
-Query quyết định lấy tất cả Authors theo ID. Graph yêu cầu Books phải được load trong cùng fetch plan.
+Ý nghĩa:
 
-Hibernate thường sinh SQL có `LEFT JOIN books`, nhưng chuẩn EntityGraph chỉ nói dữ liệu nào phải available; provider vẫn có thể dùng secondary selects.
+```text
+JPQL:
+lấy tất cả Authors theo thứ tự ID.
 
-## 11. Các phương pháp, SQL và metrics
-
-Các SQL bên dưới là dạng rút gọn tương đương để dễ đọc. Hibernate có thể đổi alias như `a1_0`, thứ tự columns và cú pháp pagination theo database dialect.
-
-Metrics giả định dataset mặc định và `DemoMetrics` đã `entityManager.clear()` rồi reset Hibernate Statistics trước từng block. Không học thuộc `elapsed`; chỉ bốn metric sau ổn định cho demo:
-
-| Scenario | JDBC | Entities | Collections loaded | Collections fetched |
-|---|---:|---:|---:|---:|
-| Baseline N+1 | 6 | 20 | 5 | 5 |
-| Dynamic graph | 1 | 20 | 5 | 0 |
-| Named graph | 1 | 20 | 5 | 0 |
-| Derived query | 1 | 8 | 2 | 0 |
-| `findById` graph | 1 | 4 | 1 | 0 |
-| Nested dynamic | 1 | 25 | 5 | 0 |
-| Nested named | 1 | 25 | 5 | 0 |
-| JPQL + graph | 1 | 12 | 3 | 0 |
-| FETCH graph | 1 | 20 | 5 | 0 |
-| LOAD graph | 4 | 23 | 5 | 0 |
-| Programmatic graph | 1 | 4 | 1 | 0 |
-| Books + Awards | 1 | 30 | 10 | 0 |
-| Pagination ToOne | 2 | 3 | 0 | 0 |
-| Pagination ToMany | 2 | 20 | 5 | 0 |
-| Two-step pagination | 3 | 8 | 2 | 0 |
-
-### 11.1 Baseline N+1
-
-Endpoint:
-
-```http
-GET /api/entity-graph/01-baseline-n-plus-one
+EntityGraph:
+khi trả kết quả, Books của các Authors phải được load.
 ```
 
-Code:
-
-```java
-List<Author> authors = repository.findAllForNPlusOneBaseline();
-for (Author author : authors) {
-    author.getBooks().size();
-}
-```
-
-SQL rút gọn:
+Hibernate thường kết hợp thành:
 
 ```sql
--- Query 1: lấy 5 Authors
-SELECT a.id, a.name
+SELECT a.id, a.name, b.*
 FROM authors a
+LEFT JOIN books b ON b.author_id = a.id
 ORDER BY a.id;
+```
 
--- Query 2..6: mỗi Author trigger một lazy collection fetch
-SELECT b.* FROM books b WHERE b.author_id = 1;
-SELECT b.* FROM books b WHERE b.author_id = 2;
-SELECT b.* FROM books b WHERE b.author_id = 3;
-SELECT b.* FROM books b WHERE b.author_id = 4;
-SELECT b.* FROM books b WHERE b.author_id = 5;
+So với baseline:
+
+```text
+Baseline:
+1 Author query + 3 Country queries + 5 Book queries = 9 statements
+
+EntityGraph:
+1 joined query = 1 statement
 ```
 
 Metrics:
 
 ```text
-JDBC statements:      6
+JDBC statements:      1
 entities loaded:      20
 collections loaded:   5
-collections fetched:  5
+collections fetched:  0
 ```
 
-Giải thích:
+`collections fetched = 0` vì không có lazy collection SELECT riêng. Books đến từ root query.
+
+## 3. Database rows trở thành object graph như thế nào?
+
+Database trả 15 joined rows:
 
 ```text
-5 Authors + 15 Books = 20 entities
-5 Authors             = 5 Books collection instances
-5 lazy SELECTs        = 5 collection fetch events
+A1-B1
+A1-B2
+A1-B3
+A2-B4
+...
+A5-B15
 ```
 
-Method riêng dùng minimal `FETCH` graph để suppress `Author.country` đang cố tình mapping `EAGER`. Nếu thay bằng `findAll()`, Hibernate hiện load thêm 3 Countries:
+Hibernate dùng primary keys và Persistence Context để hydrate thành:
 
 ```text
-1 Author query + 3 Country queries + 5 Book queries = 9 JDBC
-5 Authors + 3 Countries + 15 Books                  = 23 entities
+5 Author objects
+15 Book objects
+5 initialized Author.books collections
 ```
 
-Country là `ManyToOne`, không phải collection, nên collection metrics vẫn là `5/5`.
+Nó không tạo 15 Author objects độc lập.
 
-Điểm nói khi demo: N+1 không làm sai dữ liệu; nó tạo quá nhiều round trips vì truy cập LAZY collection trong vòng lặp.
+```text
+Các rows có cùng author_id
+-> cùng một managed Author identity
+-> Books được thêm vào collection tương ứng
+```
 
-### 11.2 Dynamic EntityGraph
+EntityGraph giảm statements, nhưng JOIN có thể nhân SQL rows. Đây sẽ là giới hạn được demo ở phần sau.
 
-Endpoint:
+## 4. Điều EntityGraph cam kết và không cam kết
+
+EntityGraph cam kết về fetch state:
+
+```text
+Association trong graph phải available/initialized theo graph semantics.
+```
+
+EntityGraph không cam kết:
+
+```text
+- luôn đúng một SQL;
+- luôn dùng LEFT JOIN;
+- luôn nhanh hơn;
+- result set luôn nhỏ;
+- pagination ToMany luôn an toàn;
+- fetch nhiều collections không có trade-off.
+```
+
+Provider có thể chọn:
+
+```text
+- JOIN trong root query;
+- secondary SELECT;
+- kết hợp nhiều chiến lược.
+```
+
+Tóm lại:
+
+```text
+EntityGraph mô tả "cần load cái gì",
+không phải một lời cam kết "phải load bằng đúng SQL nào".
+```
+
+## 5. Ba cách khai báo graph
+
+### Dynamic graph
+
+```java
+@EntityGraph(attributePaths = "books")
+List<Author> findAllWithDynamicGraph();
+```
+
+Phù hợp khi graph:
+
+```text
+- ngắn;
+- chỉ dùng ở một repository method;
+- nhìn ngay method là hiểu.
+```
+
+### Named graph
+
+Khai báo trên entity:
+
+```java
+@NamedEntityGraph(
+    name = "Author.withBooks",
+    attributeNodes = @NamedAttributeNode("books")
+)
+```
+
+Sử dụng:
+
+```java
+@EntityGraph("Author.withBooks")
+List<Author> findAllWithNamedGraph();
+```
+
+Phù hợp khi:
+
+```text
+- fetch plan được tái sử dụng;
+- có nested subgraph;
+- muốn đặt tên cho use case.
+```
+
+Named graph không tự động nhanh hơn dynamic graph. Với graph chỉ có Books, chúng tạo SQL và metrics giống nhau.
+
+### Programmatic graph
+
+```java
+EntityGraph<Author> graph = entityManager.createEntityGraph(Author.class);
+graph.addAttributeNodes("books");
+
+Author author = entityManager.find(
+    Author.class,
+    id,
+    Map.of("jakarta.persistence.fetchgraph", graph)
+);
+```
+
+Phù hợp khi fetch plan phụ thuộc runtime flags, permissions hoặc request shape.
+
+Trade-off:
+
+```text
++ linh hoạt
+- verbose
+- dùng string attribute names
+- số combinations có thể tăng nhanh
+```
+
+---
+
+# Part 3 — Demo
+
+## 6. Thông tin quan sát trong mỗi scenario
+
+Mỗi endpoint được phân tích theo cùng một cấu trúc:
+
+```text
+1. Use case cần gì?
+2. Repository code là gì?
+3. SQL shape thay đổi ra sao?
+4. Metrics nói gì?
+5. Trade-off hoặc conclusion là gì?
+```
+
+Ưu tiên đọc metrics:
+
+```text
+1. JDBC statements
+2. SQL shape
+3. entities loaded
+4. collections loaded
+5. collections fetched
+```
+
+Không nên kết luận từ `elapsed` của một lần chạy H2 local.
+
+## 7. Bảng kết quả tổng hợp
+
+Các số dưới đây dùng dataset mặc định:
+
+| # | Scenario | JDBC | Entities | Collections loaded | Collections fetched |
+|---:|---|---:|---:|---:|---:|
+| 01 | Baseline N+1 | 9 | 23 | 5 | 5 |
+| 02 | Dynamic graph | 1 | 20 | 5 | 0 |
+| 03 | Named graph | 1 | 20 | 5 | 0 |
+| 04 | Derived query | 1 | 8 | 2 | 0 |
+| 05 | `findById` graph | 1 | 4 | 1 | 0 |
+| 06 | Nested dynamic | 1 | 25 | 5 | 0 |
+| 06 | Nested named | 1 | 25 | 5 | 0 |
+| 07 | JPQL + graph | 1 | 12 | 3 | 0 |
+| 08 | `FETCH` graph | 1 | 20 | 5 | 0 |
+| 08 | `LOAD` graph | 4 | 23 | 5 | 0 |
+| 09 | Programmatic graph | 1 | 4 | 1 | 0 |
+| 10 | Runtime: no collections | 1 | 2 | 0 | 0 |
+| 10 | Runtime: Books only | 1 | 6 | 1 | 0 |
+| 10 | Runtime: Awards only | 1 | 4 | 1 | 0 |
+| 10 | Runtime: Books + Awards | 3 | 8 | 2 | 1 |
+| 11 | Books + Awards | 1 | 30 | 10 | 0 |
+| 12 | Pagination ToOne | 2 | 3 | 0 | 0 |
+| 12 | Pagination ToMany | 2 | 20 | 5 | 0 |
+| 12 | Two-step pagination | 3 | 8 | 2 | 0 |
+
+SQL alias, column order và execution plan có thể thay đổi theo Hibernate version và database dialect. Ý nghĩa fetch plan mới là phần ổn định.
+
+---
+
+## Demo stage A — Từ problem đến fix
+
+### 8. Scenario 01 — Baseline N+1
+
+```http
+GET /api/entity-graph/01-baseline-n-plus-one
+```
+
+Quan sát:
+
+```text
+SELECT Authors
+SELECT Books WHERE author_id = ?
+SELECT Books WHERE author_id = ?
+...
+```
+
+Kết luận:
+
+```text
+LAZY không xấu.
+N+1 xuất hiện khi code access LAZY association lặp lại trên nhiều parents.
+```
+
+### 9. Scenario 02 — Dynamic EntityGraph
 
 ```http
 GET /api/entity-graph/02-dynamic-graph
@@ -754,52 +490,36 @@ Repository:
 List<Author> findAllWithDynamicGraph();
 ```
 
-SQL rút gọn:
+Quan sát:
+
+```text
+9 JDBC -> 1 JDBC
+5 lazy fetch events -> 0
+```
+
+SQL:
 
 ```sql
-SELECT a.id, a.name,
-       b.id, b.author_id, b.title, b.publish_year, b.publisher_id
+SELECT a.*, b.*
 FROM authors a
 LEFT JOIN books b ON b.author_id = a.id
 ORDER BY a.id;
 ```
 
-Database trả 15 joined rows; Hibernate hydrate thành 5 Authors và 15 Books.
-
-Metrics:
+Kết luận:
 
 ```text
-JDBC statements:      1
-entities loaded:      20
-collections loaded:   5
-collections fetched:  0
+Ta không đổi Author.books thành EAGER.
+Chỉ repository method này yêu cầu Books.
 ```
 
-`collections loaded=5` vì năm `Author.books` đã initialized. `collections fetched=0` vì Books đến từ root joined query, không có collection SELECT riêng.
-
-Điểm nói khi demo: từ `6` JDBC xuống `1`, nhưng object graph vẫn là `5 Authors + 15 Books`.
-
-### 11.3 Named EntityGraph
-
-Endpoint:
+### 10. Scenario 03 — Named EntityGraph
 
 ```http
 GET /api/entity-graph/03-named-graph
 ```
 
-Khai báo và sử dụng:
-
-```java
-@NamedEntityGraph(
-    name = "Author.withBooks",
-    attributeNodes = @NamedAttributeNode("books")
-)
-
-@EntityGraph("Author.withBooks")
-List<Author> findAllWithNamedGraph();
-```
-
-`@NamedEntityGraphs` số nhiều chỉ là container gom nhiều graph độc lập:
+Named graphs hiện có:
 
 ```text
 @NamedEntityGraphs
@@ -808,31 +528,22 @@ List<Author> findAllWithNamedGraph();
 └── Author.withBooksAndAwards
 ```
 
-Repository chọn một graph bằng tên; Hibernate không tự gộp cả ba. `@NamedSubgraph` mới là nhánh con bên trong một graph, ví dụ `Author -> Books -> Publisher`.
+Đây là ba graphs độc lập được đặt trong một container annotation. Hibernate không tự gộp cả ba.
 
-SQL và metrics giống Dynamic graph:
+SQL và metrics giống Dynamic graph.
 
-```sql
-SELECT a.id, a.name, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
-ORDER BY a.id;
-```
+Kết luận:
 
 ```text
-JDBC statements:      1
-entities loaded:      20
-collections loaded:   5
-collections fetched:  0
+Dynamic và Named không khác nhau về performance trong graph đơn giản này.
+Named graph có giá trị ở naming, reuse và nested subgraph.
 ```
 
-Không có Country trong metrics vì Spring Data `@EntityGraph` mặc định là `FETCH`. Country nằm ngoài `Author.withBooks` nên bị xem như LAZY cho operation này, dù mapping gốc là EAGER.
+---
 
-Named graph không nhanh hơn Dynamic graph trong ví dụ đơn giản. Lợi ích là đặt tên và tái sử dụng fetch plan, đặc biệt khi có subgraphs.
+## Demo stage B — Áp dụng graph vào các query styles
 
-### 11.4 Derived query + EntityGraph
-
-Endpoint:
+### 11. Scenario 04 — Derived query + EntityGraph
 
 ```http
 GET /api/entity-graph/04-derived-query
@@ -845,44 +556,32 @@ Repository:
 List<Author> findByNameContainingIgnoreCaseOrderById(String name);
 ```
 
-Service truyền `"George"`, nên Spring Data tạo điều kiện tương đương:
+Service truyền `"George"`.
+
+Spring Data tạo phần filter:
 
 ```sql
-SELECT a.id, a.name, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
 WHERE LOWER(a.name) LIKE LOWER('%George%')
-ORDER BY a.id;
 ```
 
-Hai Authors khớp:
-
-```text
-George R.R. Martin
-George Orwell
-```
+EntityGraph thêm fetch plan cho Books.
 
 Metrics:
 
 ```text
-JDBC statements:      1
-entities loaded:      8
-collections loaded:   2
-collections fetched:  0
+2 Authors + 6 Books = 8 entities
+1 JDBC statement
 ```
 
-Tính toán:
+Kết luận:
 
 ```text
-2 Authors + 6 Books = 8 entities
-2 Authors           = 2 Books collections
+Derived method quyết định rows.
+EntityGraph quyết định associations.
+Không cần viết JPQL chỉ để fetch Books.
 ```
 
-Điểm nói khi demo: Spring Data tạo phần `WHERE`; EntityGraph vẫn quyết định fetch Books. Không cần viết JPQL chỉ để gắn fetch plan.
-
-### 11.5 EntityGraph trên `findById`
-
-Endpoint:
+### 12. Scenario 05 — EntityGraph trên `findById`
 
 ```http
 GET /api/entity-graph/05-find-by-id
@@ -896,33 +595,27 @@ Repository:
 Optional<Author> findById(Long id);
 ```
 
-SQL cho ID 1:
+Use case:
 
-```sql
-SELECT a.id, a.name, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
-WHERE a.id = 1;
+```text
+Author detail luôn cần Books.
 ```
 
 Metrics:
 
 ```text
-JDBC statements:      1
-entities loaded:      4
-collections loaded:   1
-collections fetched:  0
+1 Author + 3 Books = 4 entities
+1 JDBC statement
 ```
+
+Trade-off:
 
 ```text
-1 Author + 3 Books = 4 entities
+Override ảnh hưởng mọi caller của findById.
+Nếu có caller không cần Books, tạo method riêng rõ intent hơn.
 ```
 
-Country bị suppress bởi `FETCH` graph. Override ảnh hưởng mọi caller dùng method `findById`; nếu có caller không cần Books, nên tạo repository method có tên riêng.
-
-### 11.6 Nested EntityGraph
-
-Endpoint:
+### 13. Scenario 06 — Nested EntityGraph
 
 ```http
 GET /api/entity-graph/06-nested-graph
@@ -936,44 +629,44 @@ Author
     └── Publisher
 ```
 
-Dynamic form:
+Dynamic:
 
 ```java
 @EntityGraph(attributePaths = {"books", "books.publisher"})
 ```
 
-Named form dùng `Author.withBooksAndPublisher` và `@NamedSubgraph`. Endpoint chạy hai metric blocks riêng; `DemoMetrics` clear Persistence Context giữa hai blocks.
+Named:
 
-SQL rút gọn của cả hai:
+```text
+Author.withBooksAndPublisher
+└── @NamedSubgraph books.publisher
+```
+
+SQL:
 
 ```sql
-SELECT a.id, a.name,
-       b.id, b.title, b.publish_year,
-       p.id, p.name
+SELECT a.*, b.*, p.*
 FROM authors a
 LEFT JOIN books b      ON b.author_id = a.id
 LEFT JOIN publishers p ON p.id = b.publisher_id
 ORDER BY a.id;
 ```
 
-Metric cho từng block:
-
-```text
-JDBC statements:      1
-entities loaded:      25
-collections loaded:   5
-collections fetched:  0
-```
+Metrics cho mỗi form:
 
 ```text
 5 Authors + 15 Books + 5 Publishers = 25 entities
+1 JDBC statement
 ```
 
-Publisher là `ManyToOne`, không phải collection, nên chỉ có năm Books collections. Graph nested tránh query Publisher khi service gọi `book.getPublisher().getName()`.
+Kết luận:
 
-### 11.7 JPQL + EntityGraph
+```text
+Nested graph tránh N+1 tiếp theo khi code gọi:
+book.getPublisher().getName()
+```
 
-Endpoint:
+### 14. Scenario 07 — Custom JPQL + EntityGraph
 
 ```http
 GET /api/entity-graph/07-query-plus-graph
@@ -993,121 +686,107 @@ Repository:
 List<Author> searchWithQueryAndEntityGraph(...);
 ```
 
-Service truyền `keyword="George"`, `minId=4`. SQL tương đương:
+Service truyền:
 
-```sql
-SELECT a.id, a.name, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
-WHERE LOWER(a.name) LIKE LOWER('%George%')
-   OR a.id > 4
-ORDER BY a.id;
+```text
+keyword = George
+minId   = 4
 ```
 
-Authors được chọn là IDs 3, 4 và 5.
+Authors được chọn:
+
+```text
+ID 3: George R.R. Martin
+ID 4: George Orwell
+ID 5: Alexandre Dumas
+```
 
 Metrics:
 
 ```text
-JDBC statements:      1
-entities loaded:      12
-collections loaded:   3
-collections fetched:  0
-```
-
-```text
 3 Authors + 9 Books = 12 entities
+1 JDBC statement
 ```
 
-Điểm nói khi demo:
+Kết luận:
 
 ```text
-JPQL        -> chọn rows bằng WHERE/ORDER BY
-EntityGraph -> yêu cầu Books được initialized
-Hibernate   -> kết hợp thành SQL execution plan
+JPQL:
+WHERE, ORDER BY và root rows.
+
+EntityGraph:
+fetch Books.
+
+Hibernate:
+kết hợp cả hai thành execution plan.
 ```
 
-### 11.8 `FETCH` graph và `LOAD` graph
+Flow đầy đủ từ JPQL xuống database được tách tại [Từ JPQL đến Database và trở lại Java](JPQL_TO_DATABASE_FLOW.md).
 
-Endpoint:
+---
+
+## Demo stage C — Semantics và runtime fetch plans
+
+### 15. Scenario 08 — `FETCH` graph và `LOAD` graph
 
 ```http
 GET /api/entity-graph/08-fetch-vs-load
 ```
 
-Graph ở cả hai trường hợp chỉ chứa Books. `Author.country` được mapping EAGER có chủ đích.
+Graph chỉ chứa Books. `Author.country` đang mapping EAGER để tạo sự khác biệt.
 
-#### FETCH graph
+`FETCH` graph:
 
 ```text
-Association trong graph -> fetch
-Association ngoài graph  -> xem như LAZY cho operation này
+Trong graph  -> fetch
+Ngoài graph -> xem như LAZY cho operation này
 ```
 
-SQL tương đương Dynamic graph:
+Kết quả:
 
-```sql
-SELECT a.id, a.name, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
-ORDER BY a.id;
+```text
+Books được load
+Country không được load
+1 JDBC
+20 entities
+```
+
+`LOAD` graph:
+
+```text
+Trong graph  -> fetch
+Ngoài graph -> giữ mapping mặc định
+```
+
+Country giữ EAGER. Hibernate 6.4 hiện dùng ba secondary selects cho ba Countries:
+
+```text
+1 root query
++ 3 Country queries
+= 4 JDBC
 ```
 
 Metrics:
-
-```text
-JDBC statements:      1
-entities loaded:      20
-collections loaded:   5
-collections fetched:  0
-```
-
-Country nằm ngoài graph nên không load.
-
-#### LOAD graph
-
-```text
-Association trong graph -> fetch
-Association ngoài graph  -> giữ fetch type từ entity mapping
-```
-
-Hibernate 6.4 hiện lấy Authors + Books, sau đó secondary-select ba Countries duy nhất:
-
-```sql
-SELECT a.id, a.name, a.country_id, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
-ORDER BY a.id;
-
-SELECT c.* FROM countries c WHERE c.id = 1;
-SELECT c.* FROM countries c WHERE c.id = 2;
-SELECT c.* FROM countries c WHERE c.id = 3;
-```
-
-Metrics:
-
-```text
-JDBC statements:      4
-entities loaded:      23
-collections loaded:   5
-collections fetched:  0
-```
 
 ```text
 5 Authors + 15 Books + 3 Countries = 23 entities
 ```
 
-EAGER bảo đảm Country initialized, không bảo đảm Hibernate phải join. Country không làm tăng collection metrics vì nó là `ManyToOne`.
+Kết luận:
 
-### 11.9 Programmatic EntityGraph
+```text
+FETCH/LOAD là semantics của fetch plan.
+Không phải hai keyword bắt Hibernate dùng hai SQL shapes cố định.
+EAGER cũng không đồng nghĩa luôn JOIN.
+```
 
-Endpoint:
+### 16. Scenario 09 — Programmatic EntityGraph
 
 ```http
 GET /api/entity-graph/09-programmatic-graph
 ```
 
-Code lấy Author ID 2:
+Code:
 
 ```java
 EntityGraph<Author> graph = entityManager.createEntityGraph(Author.class);
@@ -1120,129 +799,91 @@ Author author = entityManager.find(
 );
 ```
 
-SQL:
-
-```sql
-SELECT a.id, a.name, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
-WHERE a.id = 2;
-```
-
 Metrics:
 
 ```text
-JDBC statements:      1
-entities loaded:      4
-collections loaded:   1
-collections fetched:  0
+1 Author + 3 Books = 4 entities
+1 JDBC statement
 ```
+
+Kết luận:
 
 ```text
-1 Author + 3 Books = 4 entities
+Graph có thể được build ở runtime,
+không bắt buộc phải nằm trong annotation.
 ```
 
-Hint là `fetchgraph`, nên Country không có trong runtime graph bị suppress. Programmatic graph phù hợp khi fetch plan phụ thuộc flags hoặc permissions, nhưng verbose và dùng string attributes.
-
-### 11.10 Runtime graph theo request flags
+### 17. Scenario 10 — Runtime graph theo request flags
 
 Endpoint:
 
 ```http
-GET /api/entity-graph/10-runtime-graph/authors/{id}?includeBooks=...&includeAwards=...
+GET /api/entity-graph/10-runtime-graph/authors/{id}
+    ?includeBooks=...
+    &includeAwards=...
 ```
 
-Graph luôn chứa Country vì DTO luôn trả Country. Khi có Books, graph thêm nested Publisher.
+Graph luôn chứa Country vì DTO luôn trả Country.
 
-#### Không Books, không Awards
+Khi `includeBooks=true`, graph thêm:
+
+```text
+Books -> Publisher
+```
+
+Khi `includeAwards=true`, graph thêm Awards.
+
+#### Case A — Không collection
 
 ```http
 GET /api/entity-graph/10-runtime-graph/authors/1?includeBooks=false&includeAwards=false
 ```
 
-```sql
-SELECT a.id, a.name, c.id, c.name
-FROM authors a
-LEFT JOIN countries c ON c.id = a.country_id
-WHERE a.id = 1;
-```
-
 ```text
-JDBC statements:      1
-entities loaded:      2   = 1 Author + 1 Country
-collections loaded:   0
-collections fetched:  0
+1 Author + 1 Country
+1 JDBC
+0 collections
 ```
 
-#### Chỉ Books
+#### Case B — Chỉ Books
 
 ```http
 GET /api/entity-graph/10-runtime-graph/authors/1?includeBooks=true&includeAwards=false
 ```
 
-```sql
-SELECT a.*, c.*, b.*, p.*
-FROM authors a
-LEFT JOIN countries c  ON c.id = a.country_id
-LEFT JOIN books b      ON b.author_id = a.id
-LEFT JOIN publishers p ON p.id = b.publisher_id
-WHERE a.id = 1;
-```
-
 ```text
-JDBC statements:      1
-entities loaded:      6   = Author + Country + 3 Books + Publisher
-collections loaded:   1
-collections fetched:  0
+Author + Country + 3 Books + 1 Publisher
+1 JDBC
+1 collection
 ```
 
-#### Chỉ Awards
+#### Case C — Chỉ Awards
 
 ```http
 GET /api/entity-graph/10-runtime-graph/authors/1?includeBooks=false&includeAwards=true
 ```
 
-```sql
-SELECT a.*, c.*, aw.*
-FROM authors a
-LEFT JOIN countries c ON c.id = a.country_id
-LEFT JOIN awards aw   ON aw.author_id = a.id
-WHERE a.id = 1;
-```
-
 ```text
-JDBC statements:      1
-entities loaded:      4   = Author + Country + 2 Awards
-collections loaded:   1
-collections fetched:  0
+Author + Country + 2 Awards
+1 JDBC
+1 collection
 ```
 
-#### Books và Awards cùng lúc
+#### Case D — Books và Awards
 
 ```http
 GET /api/entity-graph/10-runtime-graph/authors/1?includeBooks=true&includeAwards=true
 ```
 
-Trong Hibernate 6.4 và dataset hiện tại, execution plan đã quan sát là:
+Hibernate 6.4 hiện quan sát được:
 
-```sql
--- Query 1: Author + Country + Awards
-SELECT a.*, c.*, aw.*
-FROM authors a
-LEFT JOIN countries c ON c.id = a.country_id
-LEFT JOIN awards aw   ON aw.author_id = a.id
-WHERE a.id = 1;
-
--- Query 2: secondary collection fetch cho Books
-SELECT b.*
-FROM books b
-WHERE b.author_id = 1;
-
--- Query 3: cả ba Books cùng dùng một Publisher
-SELECT p.*
-FROM publishers p
-WHERE p.id = 1;
+```text
+Query 1: Author + Country + Awards
+Query 2: Books
+Query 3: Publisher
 ```
+
+Metrics:
 
 ```text
 JDBC statements:      3
@@ -1251,36 +892,67 @@ collections loaded:   2
 collections fetched:  1
 ```
 
-```text
-1 Author + 1 Country + 3 Books + 1 Publisher + 2 Awards = 8 entities
-```
-
-`collections fetched=1` là Books secondary fetch. Awards đến từ root query nên chỉ được tính loaded, không phải fetched.
-
-EntityGraph yêu cầu association phải được load; nó không bắt buộc Hibernate join tất cả trong một SQL. Fetch song song hai ToMany có thể tạo `3 x 2 = 6` rows, nên provider có thể chọn execution plan khác. SQL strategy này có thể thay đổi theo Hibernate version, mapping và graph shape.
-
-DTO dùng:
+Vì sao không phải một query?
 
 ```text
-null -> client không yêu cầu association
-[]   -> client có yêu cầu nhưng không có dữ liệu
+Graph yêu cầu Books và Awards được load.
+Graph không buộc provider JOIN cả hai collections.
+
+Hibernate có thể chọn secondary select để tránh hoặc quản lý
+row multiplication của nhiều ToMany associations.
 ```
 
-### 11.11 Hai ToMany collections
+DTO convention:
 
-Endpoint:
+```text
+null -> client không yêu cầu field
+[]   -> client yêu cầu nhưng không có dữ liệu
+```
+
+Kết luận:
+
+```text
+Programmatic graph phù hợp với runtime flags,
+nhưng API phải giới hạn combinations và graph depth.
+```
+
+---
+
+## Demo stage D — Limitations
+
+### 18. Scenario 11 — Hai ToMany collections
 
 ```http
 GET /api/entity-graph/11-multiple-collections
 ```
 
-Named graph chứa Books và Awards, nhưng không có nested Publisher:
+Graph:
+
+```text
+Author
+├── 3 Books
+└── 2 Awards
+```
+
+JOIN tạo cho mỗi Author:
+
+```text
+3 Books × 2 Awards = 6 SQL rows
+```
+
+Toàn dataset:
+
+```text
+5 Authors × 6 rows = 30 joined rows
+```
+
+SQL:
 
 ```sql
 SELECT a.*, b.*, aw.*
 FROM authors a
-LEFT JOIN awards aw ON aw.author_id = a.id
 LEFT JOIN books b   ON b.author_id = a.id
+LEFT JOIN awards aw ON aw.author_id = a.id
 ORDER BY a.id;
 ```
 
@@ -1293,129 +965,84 @@ collections loaded:   10
 collections fetched:  0
 ```
 
-Entities:
+Một statement không đồng nghĩa một result set nhỏ.
+
+`Author.awards` dùng `Set`, nên Hibernate có thể fetch cùng `List<Book>` mà không gặp trường hợp hai Bags. Tuy nhiên:
 
 ```text
-5 Authors + 15 Books + 10 Awards = 30 entities
+Set tránh MultipleBagFetchException trong mapping này.
+Set không tránh Cartesian row multiplication.
+Set không làm pagination ToMany an toàn.
 ```
 
-Collections:
+Kết luận:
 
 ```text
-5 Books collections + 5 Awards collections = 10
+Tối ưu query count mà bỏ qua row count có thể tạo một query rất nặng.
 ```
 
-SQL rows:
+Phần Bag, `PersistentBag`, duplicate semantics và cách tái hiện exception nằm trong [EntityGraph deep-dive reference](ENTITY_GRAPH_DEEP_DIVE.md).
 
-```text
-3 Books x 2 Awards x 5 Authors = 30 joined rows
-```
-
-Con số SQL rows và entities cùng là 30 chỉ là trùng hợp; chúng đo hai thứ khác nhau. Log mỗi Author cho thấy:
-
-```text
-3 distinct Books
-2 Awards
-6 joined rows
-hydrated List<Book> size = 6
-```
-
-`Set<Award>` tránh hai Bags và loại Awards lặp, nhưng không tránh row multiplication hay Books references lặp trong List.
-
-### 11.12 EntityGraph và pagination
-
-Endpoint:
+### 19. Scenario 12 — Pagination boundaries
 
 ```http
 GET /api/entity-graph/12-pagination
 ```
 
-Endpoint chạy ba scenario với:
+Endpoint chạy ba trường hợp với:
 
 ```java
 PageRequest.of(0, 2)
 ```
 
+#### Case A — ToOne Country: an toàn
+
 ```text
-page number = 0
-page size   = 2
+Một Author có tối đa một Country.
+JOIN vẫn gần một SQL row cho mỗi Author.
+Database có thể áp OFFSET/LIMIT trực tiếp.
 ```
 
-#### A. ToOne Country pagination an toàn
-
-Một Author có tối đa một Country nên mỗi Author vẫn tương ứng một SQL row:
+SQL:
 
 ```sql
--- Content query
 SELECT a.*, c.*
 FROM authors a
 LEFT JOIN countries c ON c.id = a.country_id
 ORDER BY a.id
 OFFSET 0 ROWS FETCH FIRST 2 ROWS ONLY;
 
--- Count query để tạo Page metadata
-SELECT COUNT(a.id)
-FROM authors a;
+SELECT COUNT(a.id) FROM authors a;
 ```
 
-Hai Authors đầu đều dùng United Kingdom, nên Persistence Context chỉ tạo một Country object.
+Metrics:
 
 ```text
-JDBC statements:      2
-entities loaded:      3   = 2 Authors + 1 Country
-collections loaded:   0
-collections fetched:  0
+2 JDBC
+2 Authors + 1 shared Country = 3 entities
 ```
 
-Database paginate đúng hai parent rows.
+#### Case B — ToMany Books: không an toàn
 
-#### B. ToMany Books pagination không an toàn
-
-Joined rows bắt đầu như sau:
+JOIN rows:
 
 ```text
-row 1: A1-B1
-row 2: A1-B2
-row 3: A1-B3
-row 4: A2-B4
-row 5: A2-B5
-row 6: A2-B6
+A1-B1
+A1-B2
+A1-B3
+A2-B4
+A2-B5
+A2-B6
 ```
 
-Nếu database áp dụng limit 2 trực tiếp, nó chỉ trả `A1-B1`, `A1-B2`: không đủ hai Authors và collection A1 còn thiếu B3.
-
-Với config mặc định hiện tại là `false`, Hibernate bỏ SQL-level limit cho collection fetch, đọc toàn bộ joined result rồi cắt hai Authors trong memory:
-
-```sql
--- Không có OFFSET/FETCH trong content query
-SELECT a.*, b.*
-FROM authors a
-LEFT JOIN books b ON b.author_id = a.id
-ORDER BY a.id;
-
-SELECT COUNT(a.id)
-FROM authors a;
-```
+Nếu database cắt hai rows:
 
 ```text
-JDBC statements:      2
-entities loaded:      20  = 5 Authors + 15 Books
-collections loaded:   5
-collections fetched:  0
+không có hai Authors hoàn chỉnh
+và Books collection của A1 cũng chưa đủ.
 ```
 
-Mặc dù page size là 2, Hibernate vẫn load dữ liệu của cả 5 Authors. Warning:
-
-```text
-HHH90003004: firstResult/maxResults specified with collection fetch;
-applying in memory
-```
-
-`firstResult/maxResults` là JPA offset/limit. `Applying in memory` nghĩa là hydrate toàn bộ parent/child result trước, sau đó mới lấy page trong Java memory.
-
-#### C. `fail_on_pagination_over_collection_fetch`
-
-Config hiện tại:
+Với config hiện tại:
 
 ```yaml
 hibernate:
@@ -1423,16 +1050,31 @@ hibernate:
     fail_on_pagination_over_collection_fetch: false
 ```
 
+Hibernate bỏ SQL-level pagination, load toàn bộ joined result rồi cắt hai Authors trong memory.
+
+Warning:
+
 ```text
-false -> log warning, chạy in-memory pagination, rồi tiếp tục two-step demo
-true  -> throw exception trước khi gửi unsafe SQL
+HHH90003004: firstResult/maxResults specified with collection fetch;
+applying in memory
 ```
 
-Khi đổi thành `true`, unsafe metric block có thể là `JDBC=0`, endpoint trả HTTP 500 và method không chạy tới two-step scenario vì cả ba scenarios đang nằm trong cùng method. `true` là fail-fast guardrail, không phải thuật toán tự sửa pagination.
+Metrics:
 
-#### D. Two-step pagination an toàn
+```text
+page size = 2
+nhưng Hibernate load 5 Authors + 15 Books
 
-Bước 1 page parent IDs:
+JDBC statements:      2
+entities loaded:      20
+collections loaded:   5
+```
+
+`fail_on_pagination_over_collection_fetch=true` chỉ biến warning thành exception fail-fast. Nó không tự sửa query.
+
+#### Case C — Two-step pagination: an toàn
+
+Bước 1 page Author IDs:
 
 ```sql
 SELECT a.id
@@ -1441,20 +1083,14 @@ ORDER BY a.id
 OFFSET 0 ROWS FETCH FIRST 2 ROWS ONLY;
 ```
 
-Kết quả:
-
-```text
-[1, 2]
-```
-
-Bước 2 count tổng Authors:
+Bước 2 count:
 
 ```sql
 SELECT COUNT(a.id)
 FROM authors a;
 ```
 
-Bước 3 fetch đúng Authors của page cùng Books:
+Bước 3 fetch đúng Authors trong page cùng Books:
 
 ```sql
 SELECT a.*, b.*
@@ -1468,227 +1104,278 @@ Metrics:
 
 ```text
 JDBC statements:      3
-entities loaded:      8   = 2 Authors + 6 Books
+entities loaded:      8
 collections loaded:   2
 collections fetched:  0
 ```
 
-ID và count là scalar values, không phải entities, nên không tăng `entities loaded`.
-
-Ba queries an toàn có thể tốt hơn hai queries nếu cách hai queries phải đọc toàn bộ joined dataset. Quy tắc nhớ nhanh:
+Kết luận:
 
 ```text
-ToOne:  một parent vẫn gần một row -> paginate trực tiếp thường an toàn
-ToMany: một parent thành nhiều rows -> page parent IDs trước, fetch children sau
+ToOne:
+paginate trực tiếp thường an toàn.
+
+ToMany:
+page parent IDs trước,
+sau đó fetch associations cho đúng page.
 ```
 
-`Page` cần count để trả `totalElements` và `totalPages`. Nếu không cần tổng, `Slice` thường có thể tránh count query.
+Ba queries an toàn có thể tốt hơn hai queries nếu hai queries kia phải load toàn bộ dataset rồi paginate trong memory.
 
-## 12. EntityGraph và JOIN FETCH
+---
 
-Cả hai thường có thể sinh SQL join tương tự:
+# Part 4 — Best Practices
 
-```jpql
-SELECT DISTINCT a
-FROM Author a
-LEFT JOIN FETCH a.books
-```
+## 20. Giữ mapping mặc định `LAZY`
 
-so với:
+Ưu tiên:
 
 ```java
-@EntityGraph(attributePaths = "books")
-@Query("SELECT a FROM Author a")
+@ManyToOne(fetch = FetchType.LAZY)
+@OneToMany(fetch = FetchType.LAZY)
 ```
 
-Khác biệt chính:
+Sau đó chọn fetch plan theo từng use case.
 
-| Tiêu chí | `JOIN FETCH` | `EntityGraph` |
-|---|---|---|
-| Fetch plan nằm ở đâu | Trong JPQL | Metadata/hint tách khỏi query |
-| Derived query | Phải viết query nếu cần fetch join | Gắn graph trực tiếp lên derived method |
-| Điều khiển join/filter | Rõ và trực tiếp trong JPQL | Provider quyết định SQL shape |
-| Tái sử dụng | Thường lặp fetch clause | Named graph có thể tái sử dụng |
-| Pagination ToMany | Có rủi ro | Có cùng loại rủi ro |
-| Multiple collections | Có multiplication/bag risk | Có cùng loại risk |
-
-EntityGraph không luôn nhanh hơn JOIN FETCH. Lợi ích chính là tách fetch plan khỏi query và chọn association theo use case.
-
-## 13. Đọc Hibernate metrics đúng cách
-
-`DemoMetrics` clear Persistence Context và reset Hibernate Statistics trước mỗi scenario để kết quả trước không làm association đã initialized sẵn.
-
-Ưu tiên đọc:
-
-1. `JDBC statements`.
-2. SQL shape: repeated `WHERE`, `LEFT JOIN`, `IN`, count query hay secondary select.
-3. `entities loaded`.
-4. `collections loaded` và `collections fetched`.
-5. `elapsed` chỉ tham khảo trong local demo.
-
-### `collections loaded`
-
-Số collection instances được initialized. Load Books cho 5 Authors có thể là:
+Lý do:
 
 ```text
-collections loaded = 5
+EAGER là quyết định toàn cục ở mapping.
+EntityGraph là quyết định cục bộ theo repository operation.
 ```
 
-### `collections fetched`
+`Author.country = EAGER` trong module chỉ là teaching setup cho `FETCH` vs `LOAD`.
 
-Số collection fetch events riêng, thường do lazy/batch fetching; không phải số Book rows.
+## 21. Graph phải phản ánh use case
 
-Baseline:
+Ví dụ:
 
 ```text
-collections loaded  = 5
-collections fetched = 5
+Author list:
+có thể chỉ cần Author summary.
+
+Author detail:
+có thể cần Books.
+
+Author export:
+có thể cần Books + Publisher.
 ```
 
-Join graph:
+Không tạo một graph “load everything” rồi dùng cho mọi nơi.
+
+## 22. Chọn declaration phù hợp
 
 ```text
-collections loaded  = 5
-collections fetched = 0
+Dynamic graph:
+graph ngắn, dùng một chỗ.
+
+Named graph:
+reuse, nested graph hoặc fetch plan có domain meaning.
+
+Programmatic graph:
+runtime flags thực sự cần thiết và combinations được kiểm soát.
 ```
 
-Một batch query có thể initialize nhiều collections:
+Đừng dùng Named graph chỉ vì nghĩ nó nhanh hơn Dynamic graph.
+
+## 23. Tách row selection khỏi fetch plan
+
+EntityGraph không thay thế JPQL.
 
 ```text
-collections loaded  = 3
-collections fetched = 1
+JPQL/derived query:
+filter, sort, aggregate, chọn root rows.
+
+EntityGraph:
+chọn associations cần initialized.
 ```
 
-Đừng kết luận chỉ từ số statements. Một join statement có thể trả rất nhiều rows; một vài batched statements đôi khi hiệu quả hơn.
+Nếu query cần điều kiện phức tạp:
 
-## 14. Transaction, LAZY và OSIV
+```java
+@Query("...")
+@EntityGraph("...")
+```
 
-Config đặt:
+là một combination hợp lệ.
+
+## 24. Không đánh giá chỉ bằng số statements
+
+Luôn nhìn:
+
+```text
+- số JDBC statements;
+- SQL shape;
+- số joined rows;
+- entities loaded;
+- collections loaded/fetched;
+- pagination xảy ra ở database hay memory;
+- execution plan trên database production.
+```
+
+Ví dụ:
+
+```text
+Books + Awards:
+1 statement nhưng 30 joined rows.
+
+Two-step pagination:
+3 statements nhưng chỉ load dữ liệu của đúng 2 Authors.
+```
+
+## 25. Cẩn thận với nhiều ToMany collections
+
+Trước khi fetch cùng lúc:
+
+```text
+ước lượng:
+parent count × collection A cardinality × collection B cardinality
+```
+
+Nếu result set lớn:
+
+```text
+- fetch một collection trước;
+- dùng secondary query;
+- dùng BatchSize;
+- dùng DTO projection;
+- chia use case/API;
+- tránh client chọn graph không giới hạn.
+```
+
+Đổi `List` thành `Set` có thể tránh MultipleBagFetchException, nhưng không phải performance fix cho Cartesian product.
+
+## 26. Không collection-fetch-join trực tiếp với Pageable
+
+Khuyến nghị cho ToMany:
+
+```text
+1. Page parent IDs.
+2. Fetch entities/children theo IDs.
+```
+
+Hoặc cân nhắc:
+
+```text
+- BatchSize;
+- DTO projection;
+- keyset pagination;
+- query chuyên dụng.
+```
+
+Ở môi trường production, cân nhắc:
+
+```yaml
+hibernate:
+  query:
+    fail_on_pagination_over_collection_fetch: true
+```
+
+để unsafe pagination fail sớm thay vì âm thầm load toàn bộ.
+
+## 27. Giữ transaction boundary rõ ràng
+
+Module dùng:
 
 ```yaml
 spring.jpa.open-in-view: false
 ```
 
-Các service demo dùng:
+và:
 
 ```java
 @Transactional(readOnly = true)
 ```
 
-Vì OSIV tắt, việc đọc LAZY association phải xảy ra trong transaction/service hoặc association phải được fetch trước. DTO cũng được map bên trong transaction.
+Fetch và map DTO bên trong service transaction.
 
-Điều này tránh để web serialization vô tình trigger database queries ngoài service boundary và làm N+1 khó quan sát.
+Không để Jackson vô tình gọi LAZY getters và phát sinh SQL ở web layer.
 
-## 15. Chạy module
+## 28. DTO projection khi không cần managed entity
 
-Khởi động:
+EntityGraph phù hợp khi use case cần entity graph.
 
-```powershell
-.\gradlew.bat :02-entity-graph:bootRun
-```
-
-Swagger:
+Nếu API chỉ cần:
 
 ```text
-http://localhost:8082/swagger-ui/index.html
+authorName
+bookCount
+latestBookTitle
 ```
 
-Mỗi endpoint chạy một scenario. Response mô tả kỳ vọng; SQL và `[METRICS]` xuất hiện trong console Gradle.
+DTO projection có thể rõ và nhẹ hơn vì select đúng columns cần trả về.
 
-H2 in-memory database được tạo lại sau mỗi lần restart vì `ddl-auto: create-drop`.
+## 29. Chọn strategy theo access pattern
 
-## 16. Thứ tự demo khuyến nghị
+| Nhu cầu | Strategy nên cân nhắc |
+|---|---|
+| Cần entity + association ngay trong use case | EntityGraph hoặc JOIN FETCH |
+| Fetch plan thay đổi theo repository method | EntityGraph |
+| Query cần điều khiển JOIN/filter trực tiếp | JPQL JOIN/JOIN FETCH |
+| Giữ LAZY nhưng access nhiều targets theo lô | BatchSize |
+| API read-only chỉ cần vài fields | DTO projection |
+| Parent pagination + ToMany | Two-step, BatchSize hoặc DTO |
+| Nhiều collections lớn | Tách queries/use cases |
 
-### Flow đầy đủ
-
-1. `/01-baseline-n-plus-one` — nhìn thấy N+1.
-2. `/02-dynamic-graph` — sửa N+1 bằng graph đơn giản.
-3. `/03-named-graph` — so sánh declaration/reuse với dynamic graph.
-4. `/04-derived-query` — chứng minh graph hoạt động không cần JPQL.
-5. `/05-find-by-id` — detail use case.
-6. `/06-nested-graph` — fetch Author → Books → Publisher.
-7. `/07-query-plus-graph` — tách row selection và fetch plan.
-8. `/08-fetch-vs-load` — semantics nâng cao.
-9. `/09-programmatic-graph` — tạo graph runtime.
-10. `/10-runtime-graph/authors/1?...` — thay đổi graph bằng request flags.
-11. `/11-multiple-collections` — thấy giới hạn Cartesian/bags.
-12. `/12-pagination` — kết thúc bằng giới hạn nguy hiểm nhất.
-
-### Flow rút gọn
+## 30. Checklist trước khi merge một graph
 
 ```text
-Baseline
-    -> Dynamic graph
-    -> Nested graph
-    -> JPQL + graph
-    -> Runtime flags
-    -> Multiple collections
-    -> Pagination
+[ ] Use case có thực sự cần managed entities không?
+[ ] Association nào thực sự được sử dụng?
+[ ] Graph có ToMany không?
+[ ] Có fetch nhiều ToMany cùng lúc không?
+[ ] Ước lượng joined rows là bao nhiêu?
+[ ] Query có Pageable không?
+[ ] SQL có secondary selects không?
+[ ] Metrics có giảm query nhưng tăng data load quá nhiều không?
+[ ] Named graph có thực sự được reuse không?
+[ ] Runtime graph combinations có được giới hạn không?
+[ ] Có integration test trên database thật cho query quan trọng không?
 ```
 
-## 17. `core`, `advanced`, `all` và Swagger
+---
 
-Các mode này chỉ điều khiển `DemoRunner`, không phải khái niệm JPA.
+# Tổng kết
 
-Mặc định:
-
-```yaml
-demo:
-  mode: core
-  auto-run: false
-```
-
-Vì `auto-run=false`, không scenario nào tự chạy khi startup. Swagger vẫn có đầy đủ endpoints và đây là cách khuyến nghị để trình bày từng scenario.
-
-Nếu muốn tự chạy flow console ngắn:
-
-```powershell
-.\gradlew.bat :02-entity-graph:bootRun --args="--demo.auto-run=true --demo.mode=core"
-```
-
-`core` chạy:
+## 31. Kết luận
 
 ```text
-Baseline -> Dynamic -> Derived -> Nested -> Multiple collections -> Pagination
+N+1 xuất hiện khi load nhiều parent rồi lazy-load association từng parent.
+
+EntityGraph cho phép chọn association cần load theo từng use case,
+trong khi vẫn giữ mapping mặc định LAZY.
+
+Nó tách row selection khỏi fetch plan:
+query chọn Authors,
+graph chọn associations.
+
+Nhưng EntityGraph không phải performance guarantee.
+Một statement có thể tạo result set lớn,
+nhiều ToMany có thể nhân rows,
+và collection pagination có thể chạy trong memory.
+
+Vì vậy phải chọn graph theo use case
+và đánh giá bằng SQL shape, row count và metrics,
+không chỉ bằng số query.
 ```
 
-Chạy toàn bộ:
+---
 
-```powershell
-.\gradlew.bat :02-entity-graph:bootRun --args="--demo.auto-run=true --demo.mode=all"
-```
+## 32. Tài liệu đọc sâu
 
-`advanced` và `all` hiện là alias, đều chèn thêm Named, findById, JPQL + graph, FETCH/LOAD và Programmatic graph theo đúng thứ tự service.
+Các chủ đề nền tảng và phân tích chi tiết được tách thành tài liệu tham khảo:
 
-Runtime flags API chỉ chạy khi được gọi qua HTTP; `DemoRunner` không tự giả lập bốn requests.
+- [EntityGraph deep-dive reference](ENTITY_GRAPH_DEEP_DIVE.md)
 
-## 18. Khi nào nên và không nên dùng EntityGraph?
+  Bao gồm primary key, foreign key, relationship/association, cascade, JPQL/HQL/SQL, SQL AST, hydration, Bag, `PersistentBag`, `MultipleBagFetchException`, metrics chi tiết, pagination internals và cấu hình demo runner.
 
-Nên cân nhắc EntityGraph khi:
+- [Từ JPQL đến Database và trở lại Java](JPQL_TO_DATABASE_FLOW.md)
 
-- Use case cần managed/full entity.
-- Association cần load thay đổi theo repository method.
-- Muốn giữ entity mapping mặc định `LAZY`.
-- Muốn gắn fetch plan vào derived query hoặc `findById`.
-- Graph tương đối nhỏ và lượng dữ liệu join có thể kiểm soát.
+  Flow đầy đủ `HTTP → Controller → Transaction → Repository → JPQL → SQM → SQL AST → JDBC → Database → ResultSet → hydration → Persistence Context → response`.
 
-Không nên mặc định dùng EntityGraph khi:
+Source code chính:
 
-- API chỉ cần vài columns: DTO projection thường rõ và nhẹ hơn.
-- Fetch nhiều ToMany collections lớn.
-- Paginate parent cùng collection fetch.
-- Client được phép tùy ý bật graph sâu không giới hạn.
-- Query có reporting/aggregation phức tạp, phù hợp hơn với DTO/native query.
-- Association access pattern mang tính lazy theo lô: BatchSize có thể phù hợp hơn.
-
-## 19. Kết luận
-
-```text
-EntityGraph giải quyết câu hỏi "use case này cần load association nào?"
-Nó có thể loại N+1 nhưng không tự bảo đảm result set nhỏ.
-Một statement có thể vẫn rất nặng vì row multiplication.
-ToMany collection fetch và pagination cần được xử lý riêng.
-FETCH/LOAD là semantics của graph, không phải hai loại SQL cố định.
-Programmatic graph linh hoạt nhưng cần giới hạn combinations.
-Đánh giá fetch strategy bằng SQL shape, rows và metrics, không chỉ số query.
-```
+- [EntityGraphDemoController](src/main/java/com/example/entitygraph/controller/EntityGraphDemoController.java)
+- [AuthorService](src/main/java/com/example/entitygraph/service/AuthorService.java)
+- [AuthorRepository](src/main/java/com/example/entitygraph/repository/AuthorRepository.java)
+- [Author entity và NamedEntityGraphs](src/main/java/com/example/entitygraph/entity/Author.java)

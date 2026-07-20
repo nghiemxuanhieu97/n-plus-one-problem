@@ -30,7 +30,7 @@ public class AuthorService {
         log.info("");
         log.info("+--------------------------------------------------+");
         log.info("|  [PROBLEM] N+1 Queries                           |");
-        log.info("|  findAll() - default LAZY loading on books       |");
+        log.info("|  findAll() + LAZY loading on books               |");
         log.info("+--------------------------------------------------+");
 
         demoMetrics.measure("baseline N+1: findAll() + lazy getBooks()", () -> {

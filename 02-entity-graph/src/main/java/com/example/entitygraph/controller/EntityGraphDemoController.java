@@ -23,10 +23,10 @@ public class EntityGraphDemoController {
     private final AuthorService authorService;
 
     @GetMapping("/01-baseline-n-plus-one")
-    @Operation(summary = "01 - Baseline N+1", description = "Loads 5 Authors, then lazily accesses Books. Expected: 6 JDBC statements.")
+    @Operation(summary = "01 - Baseline N+1", description = "Uses findAll(), then lazily accesses Books. Expected: 9 JDBC statements including 3 EAGER Country selects.")
     public DemoResponse baseline() {
         authorService.demonstrateNPlusOneProblem();
-        return response("Baseline N+1", "1 Author query + 5 lazy Book queries", "Look for repeated WHERE author_id = ?");
+        return response("Baseline N+1", "1 Author + 3 Country + 5 lazy Book queries", "The N+1 signal is the repeated WHERE author_id = ?");
     }
 
     @GetMapping("/02-dynamic-graph")
