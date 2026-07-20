@@ -11,7 +11,6 @@ public record BenchmarkResponse(
         long gcDelta,
         long cpuTimeMs,
         long ormQueryExecutionCount,
-        long preparedStatementCount,
         long entityLoadCount,
         long collectionLoadCount,
         long collectionFetchCount,

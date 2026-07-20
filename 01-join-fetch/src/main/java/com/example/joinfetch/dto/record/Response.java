@@ -9,15 +9,14 @@ public record Response<T>(
         List<String> ormQueries,
 
         long sqlStatementCount,
-        long preparedStatementCount,
         List<String> sqlStatements,
 
         long estimatedDatabaseRows,
 
         double executionTimeMs,
-        double cpuTimeMs,
-        double threadAllocatedMb,
-        long gcCountDelta,
+//        double cpuTimeMs,
+//        double threadAllocatedMb,
+//        long gcCountDelta,
 
         T result
 ) {
@@ -31,13 +30,12 @@ public record Response<T>(
                 0,
                 List.of(),
                 0,
-                0,
                 List.of(),
                 estimatedDatabaseRows,
                 0,
-                0,
-                0,
-                0,
+//                0,
+//                0,
+//                0,
                 result
         );
     }
@@ -47,25 +45,23 @@ public record Response<T>(
             long ormQueryExecutionCount,
             List<String> ormQueries,
             long sqlStatementCount,
-            long preparedStatementCount,
             List<String> sqlStatements,
-            double executionTimeMs,
-            double cpuTimeMs,
-            double threadAllocatedMb,
-            long gcCountDelta
+            double executionTimeMs
+//            double cpuTimeMs,
+//            double threadAllocatedMb,
+//            long gcCountDelta
     ) {
         return new Response<>(
                 scenario,
                 ormQueryExecutionCount,
                 ormQueries,
                 sqlStatementCount,
-                preparedStatementCount,
                 sqlStatements,
                 estimatedDatabaseRows,
                 executionTimeMs,
-                cpuTimeMs,
-                threadAllocatedMb,
-                gcCountDelta,
+//                cpuTimeMs,
+//                threadAllocatedMb,
+//                gcCountDelta,
                 result
         );
     }

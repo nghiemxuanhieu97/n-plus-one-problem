@@ -120,12 +120,11 @@ public class BenchmarkAspect {
                     statistics.getQueryExecutionCount(),
                     ormQueries,
                     sqlStatements.size(),
-                    statistics.getPrepareStatementCount(),
                     sqlStatementsPreview,
-                    executionTimeMs,
-                    cpuTimeMs,
-                    threadAllocatedMb,
-                    gcCountDelta
+                    executionTimeMs
+//                    cpuTimeMs,
+//                    threadAllocatedMb,
+//                    gcCountDelta
             );
         } catch (Throwable throwable) {
             /*

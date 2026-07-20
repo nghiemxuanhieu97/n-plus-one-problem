@@ -59,8 +59,21 @@ public class AuthorService {
                 .toList();
 
         long estimatedRows = result.size() + countBooks(result);
-        List<AuthorBooksDto> previewResult = result.stream().limit(5).toList();
         return Response.payload(result.stream().limit(5).toList(), estimatedRows);
+    }
+
+    @BenchmarkScenario("N_PLUS_ONE_BOOK")
+    @Transactional(readOnly = true)
+    public Response<List<AuthorCountryDto>> demoNPlusOneCountry() {
+        List<Author> authors = authorRepository.findAll();
+
+        // Mapping intentionally accesses getBooks() inside the transaction
+        // so the lazy collection queries belong to this benchmark.
+        List<AuthorCountryDto> result = authors.stream()
+                .map(AuthorCountryDto::fromEntity)
+                .toList();
+
+        return Response.payload(result.stream().limit(5).toList(), result.size());
     }
 
     /**
