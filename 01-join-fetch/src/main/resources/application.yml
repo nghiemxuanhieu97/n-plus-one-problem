@@ -22,8 +22,8 @@ spring:
       hibernate:
         format_sql: true
         generate_statistics: true
-        query:
-          fail_on_pagination_over_collection_fetch: false
+#        query:
+#          fail_on_pagination_over_collection_fetch: true
 
   h2:
     console:

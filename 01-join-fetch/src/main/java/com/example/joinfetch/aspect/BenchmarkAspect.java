@@ -27,6 +27,7 @@ public class BenchmarkAspect {
 
     private static final double BYTES_PER_MB =
             1024.0 * 1024.0;
+    private final PersistenceContextInspector inspector;
 
     private final EntityManagerFactory entityManagerFactory;
 
@@ -39,6 +40,7 @@ public class BenchmarkAspect {
         Statistics statistics = getStatistics();
 
         statistics.clear();
+        inspector.reset();
 
         // Bắt đầu thu SQL ở tầng JDBC.
         CollectingP6SpyLogger.begin();
@@ -83,22 +85,9 @@ public class BenchmarkAspect {
                             - snapshot.startedAtNanos()
             );
 
-            double cpuTimeMs = nanosToMillis(
-                    currentThreadCpuNanos(cpuMxBean)
-                            - snapshot.cpuBeforeNanos()
+            var persistenceContextProof = inspector.capture(
+                    response.result()
             );
-
-            long allocatedBytesAfter =
-                    currentThreadAllocatedBytes(allocationMxBean);
-
-            double threadAllocatedMb = allocationDeltaMb(
-                    snapshot.allocatedBytesBefore(),
-                    allocatedBytesAfter
-            );
-
-            long gcCountDelta =
-                    gcCount() - snapshot.gcBefore();
-
             List<String> ormQueries =
                     Arrays.asList(statistics.getQueries());
 
@@ -125,7 +114,7 @@ public class BenchmarkAspect {
 //                    cpuTimeMs,
 //                    threadAllocatedMb,
 //                    gcCountDelta
-            );
+            ).withPersistenceContextProof(persistenceContextProof);
         } catch (Throwable throwable) {
             /*
              * Luôn xóa ThreadLocal, kể cả khi API bị lỗi.

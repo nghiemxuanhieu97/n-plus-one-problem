@@ -8,18 +8,14 @@
 - `JOIN FETCH` với nhiều collection.
 - Phân trang kết hợp với `JOIN FETCH`
 
-## Mô hình dữ liệu
+## Mối quan hệ giữa Entity
 
 ```text
 Country (1) ------ (*) Author
 Author  (1) ------ (*) Book
 Author  (1) ------ (*) Award
 ```
-## Khởi tạo dữ liệu
-
-`DataInitializer` tạo dữ liệu khi ứng dụng khởi động.
-
-Bộ dữ liệu mặc định:
+## Giả lập dữ liệu
 
 ```text
 50 Country
@@ -28,18 +24,6 @@ Bộ dữ liệu mặc định:
 10 Award cho mỗi Author
 ```
 
-## Cách chạy Service
-
-Từ thư mục gốc của repository:
-```bash
-./gradlew :01-join-fetch:bootRun
-```
-
-OpenAPI UI:
-
-```text
-http://localhost:8080/swagger-ui/index.html
-```
 ## Các thông số trong Response
 
 ```java
@@ -80,10 +64,12 @@ Cấu trúc quan hệ hiện tại:
 ### Scenario 01: Chỉ tải Authors
 
 Trên trang tìm kiếm sách, giao diện cần một danh sách Author dạng dropdown. Dropdown này chỉ cần hai trường:
+
 | Field | Purpose |
 | --- | --- |
 | `author.id` | Dùng làm giá trị filter gửi đến backend |
 | `author.name` | Được hiển thị làm label trong dropdown |
+
 ![img.png](img.png)
 
 #### Demo endpoint: `GET /demos/authors`

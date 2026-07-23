@@ -1,5 +1,7 @@
 package com.example.joinfetch.dto.record;
 
+import com.example.joinfetch.aspect.PersistenceContextProof;
+
 import java.util.List;
 
 public record Response<T>(
@@ -14,9 +16,7 @@ public record Response<T>(
         long estimatedDatabaseRows,
 
         double executionTimeMs,
-//        double cpuTimeMs,
-//        double threadAllocatedMb,
-//        long gcCountDelta,
+        PersistenceContextProof persistenceContextProof,
 
         T result
 ) {
@@ -33,9 +33,7 @@ public record Response<T>(
                 List.of(),
                 estimatedDatabaseRows,
                 0,
-//                0,
-//                0,
-//                0,
+                null,
                 result
         );
     }
@@ -59,10 +57,24 @@ public record Response<T>(
                 sqlStatements,
                 estimatedDatabaseRows,
                 executionTimeMs,
-//                cpuTimeMs,
-//                threadAllocatedMb,
-//                gcCountDelta,
+null,
                 result
         );
     }
+    public Response<T> withPersistenceContextProof(
+            PersistenceContextProof proof
+    ) {
+        return new Response<>(
+                scenario,
+                ormQueryExecutionCount,
+                ormQueries,
+                sqlStatementCount,
+                sqlStatements,
+                estimatedDatabaseRows,
+                executionTimeMs,
+                proof,
+                result
+        );
+    }
+
 }

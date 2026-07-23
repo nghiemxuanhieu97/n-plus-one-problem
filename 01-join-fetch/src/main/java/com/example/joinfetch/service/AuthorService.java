@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -73,7 +74,7 @@ public class AuthorService {
                 .map(AuthorCountryDto::fromEntity)
                 .toList();
 
-        return Response.payload(result.stream().limit(5).toList(), result.size());
+        return Response.payload(result.stream().limit(5).toList(), result.size() + countDistinctCountries(result));
     }
 
     /**
@@ -271,6 +272,16 @@ public class AuthorService {
         return authors.stream()
                 .mapToLong(author -> author.awards().size())
                 .sum();
+    }
+
+    private long countDistinctCountries(List<AuthorCountryDto> authors) {
+        return authors.stream()
+                .map(AuthorCountryDto::country)
+                .filter(Objects::nonNull)
+                .map(CountryDto::id)
+                .filter(Objects::nonNull)
+                .distinct()
+                .count();
     }
 
     /**
