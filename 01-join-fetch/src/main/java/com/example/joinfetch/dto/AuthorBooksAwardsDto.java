@@ -1,39 +1,19 @@
 package com.example.joinfetch.dto;
 
 import com.example.joinfetch.entity.Author;
-import com.example.joinfetch.entity.Award;
-import com.example.joinfetch.entity.Book;
-
-import java.util.*;
 
 public record AuthorBooksAwardsDto(
         Long id,
         String name,
-        List<BookDto> books,
-        List<AwardDto> awards
+        Long noBooks,
+        Long noAwards
 ) {
     public static AuthorBooksAwardsDto fromEntity(Author author) {
         return new AuthorBooksAwardsDto(
                 author.getId(),
                 author.getName(),
-                uniqueBooks(author.getBooks()),
-                uniqueAwards(author.getAwards())
+                (long) author.getBooks().size(),
+                (long) author.getAwards().size()
         );
-    }
-
-    private static List<BookDto> uniqueBooks(Collection<Book> books) {
-        Map<Long, BookDto> result = new LinkedHashMap<>();
-        for (Book book : books) {
-            result.putIfAbsent(book.getId(), BookDto.fromEntity(book));
-        }
-        return List.copyOf(result.values());
-    }
-
-    private static List<AwardDto> uniqueAwards(Collection<Award> awards) {
-        Map<Long, AwardDto> result = new LinkedHashMap<>();
-        for (Award award : awards) {
-            result.putIfAbsent(award.getId(), AwardDto.fromEntity(award));
-        }
-        return List.copyOf(result.values());
     }
 }

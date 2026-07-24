@@ -258,19 +258,19 @@ public class AuthorService {
 
     private long countBooks(List<AuthorBooksDto> authors) {
         return authors.stream()
-                .mapToLong(author -> author.books().size())
+                .mapToLong(AuthorBooksDto::noBooks)
                 .sum();
     }
 
     private long countBooksFromBooksAwardsDto(List<AuthorBooksAwardsDto> authors) {
         return authors.stream()
-                .mapToLong(author -> author.books().size())
+                .mapToLong(AuthorBooksAwardsDto::noBooks)
                 .sum();
     }
 
     private long countAwards(List<AuthorBooksAwardsDto> authors) {
         return authors.stream()
-                .mapToLong(author -> author.awards().size())
+                .mapToLong(AuthorBooksAwardsDto::noAwards)
                 .sum();
     }
 
@@ -291,7 +291,7 @@ public class AuthorService {
     private long estimateCartesianRowsAuthorBookReview(List<AuthorBooksAwardsDto> authors) {
         return authors.stream()
                 .mapToLong(author ->
-                        (long) author.books().size() * author.awards().size()
+                        author.noBooks() * author.noAwards()
                 )
                 .sum();
     }
@@ -299,7 +299,7 @@ public class AuthorService {
     private long estimateCartesianRows(List<AuthorReviewAwardsDto> authors) {
         return authors.stream()
                 .mapToLong(author ->
-                        (long) author.reviews().size() * author.awards().size()
+                        (long) author.reviews().size() * author.noAwards()
                 )
                 .sum();
     }

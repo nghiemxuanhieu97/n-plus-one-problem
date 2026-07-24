@@ -1,5 +1,4 @@
 # Chủ đề 1: Sử dụng Join Fetch để giải quyết vấn đề N+1
-Tìm hiểu cách JOIN FETCH làm giảm các truy vấn không cần thiết, đồng thời nhận biết những trường hợp nó có thể tạo ra tập dữ liệu quá lớn hoặc làm sai cách phân trang.
 
 ## Nội dung trình bày
 
@@ -31,45 +30,52 @@ Hệ thống quản lý sách trực tuyến cho phép người dùng tìm kiế
 ![img_8.png](img_8.png)
 
 ### 1.1. Mô hình dữ liệu
-```text
-Country (1) ------ (*) Author
-                         |
-                         |------ (1) (*) Book
-                         |
-                         |------ (1) (*) Award
-```
+![img_11.png](img_11.png)
 
 
-### 1.2. Dataset
+### 1.2. Tập dữ liệu
 
 ```text
-50 Country
-500 Author
-20 Book cho mỗi Author -> 10.000 Books
-10 Award cho mỗi Author -> 5.000 Awards
+50 Countries
+500 Authors
+20 Books cho mỗi Author -> 10.000 Books
+10 Awards cho mỗi Author -> 5.000 Awards
 ```
 ### 1.3. Các chức năng minh họa
 
 Bốn use case được sử dụng trong bài trình bày:
 
 1. **Lọc sách theo tác giả:** chỉ cần `Author.id` và `Author.name`.
-2. **Danh sách tác giả và quốc gia:** cần `Author` và `Country`.
-3. **Danh sách tác giả và tác phẩm:** cần `Author` và `Book`.
-4.  **Danh sách tác giả và tác phẩm và giải thưởng:** cần `Author` và `Book` và `Award`
+2. 
+![img_6.png](img_6.png)
 
+2. **Danh sách tác giả**
 
+![img_12.png](img_12.png)
 
-### 1.4. Vì sao các association được cấu hình LAZY?
+### 1.4. FetchType: LAZY và EAGER
+FetchType quy định thời điểm Hibernate tải dữ liệu của association.
+
+| FetchType | Cách hoạt động                                      | Phù hợp khi                                        | Rủi ro                                            |
+| --------- | --------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------- |
+| `EAGER`   | Association được tải ngay cùng quá trình tải entity | Dữ liệu liên quan nhỏ và gần như luôn được sử dụng | Có thể tải dư dữ liệu                             |
+| `LAZY`    | Association chỉ được tải khi được truy cập          | Association chỉ cần trong một số chức năng         | Có thể gây N+1 hoặc `LazyInitializationException` |
+
+> `EAGER` không đảm bảo Hibernate luôn sử dụng `JOIN`. Hibernate vẫn có thể tải association bằng câu SQL riêng.
+
+---
+#### Trường hợp EAGER có thể phù hợp
+
 
 Mỗi chức năng cần một lượng dữ liệu khác nhau, ví dụ:
 
-| Chức năng                         | Dữ liệu cần sử dụng                 |
-|-----------------------------------|-------------------------------------|
-| Hiển thị bộ lọc tác giả           | `Author.id`, `Author.name`          |
-| Hiển thị tác giả và quốc gia      | `Author`, `Country`                 |
-| Hiển thị các tác phẩm của tác giả | `Author`, `Book`                    |
-| Hiển thị hồ sơ đầy đủ             | `Author`, `Country`, `Book`, `Award` |
-| Hiển thị đánh giá của tác giả     | `Author`, `Country`, `Review`       |
+| Chức năng                                                   | Dữ liệu cần sử dụng                 |
+|-------------------------------------------------------------|-------------------------------------|
+| Hiển thị bộ lọc tác giả                                     | `Author.id`, `Author.name`          |
+| Hiển thị tác giả và quốc gia                                | `Author`, `Country`                 |
+| Hiển thị  tác giả và số tác phẩm                            | `Author`, `Book`                    |
+| Hiển thị tác giả cùng quốc tịch và số tác phẩm, giải thưởng | `Author`, `Country`, `Book`, `Award` |
+| Hiển thị đánh giá của tác giả                               | `Author`, `Country`, `Review`       |
 
 Với chức năng **Lọc sách theo tác giả:**
 
@@ -90,37 +96,23 @@ Author.awards
 > **LAZY giúp tránh tải dữ liệu không cần thiết**
 
 ## 2. Các tình huống xảy ra N+1
-N+1 xảy ra khi hệ thống tải một danh sách trước, sau đó với từng mục trong danh sách lại tiếp tục quay lại database để lấy thêm thông tin liên quan.
 
-> Thay vì lấy đủ dữ liệu trong một lần, hệ thống phải trao đổi với database lặp đi lặp lại. Mỗi lần trao đổi đều tốn thời gian, vì vậy danh sách càng lớn thì hệ thống càng chậm và kém hiệu quả.
-
-### 2.1. Tải danh sách tác giả và quốc gia
-![img_9.png](img_9.png)
-
-Một cách triển khai đơn giản:
-
-| Luồng xử lý                                                                                              |  | SQL phát sinh |  | Kết quả |
-|----------------------------------------------------------------------------------------------------------| :---: | --- | :---: | --- |
-| Tải danh sách Authors<br><br>↓<br><br>Duyệt qua từng Author<br><br>↓<br><br>Truy cập Country của tác giả | ➜ | 1 query tải toàn bộ Authors<br><br>+<br><br>1 query cho mỗi Country chưa được tải | ➜ | 500 Authors tham chiếu 50 Countries<br><br>**1 + 50 = 51 Tổng số câu SQL thực tế được gửi đến database** |
-### Kết quả
-
-| Metric               | Value |
-| -------------------- |------:|
-| Số query chính được gọi qua Hibernate          |   `1` |
-| Tổng số câu SQL thực tế được gửi đến database       |  `51` |
-| Estimated rows | `550` |
-
-> Mặc dù có 500 Authors, hệ thống chỉ có 50 Countries khác nhau. Sau khi một Country được tải, Hibernate có thể tái sử dụng entity đó trong Persistence Context hiện tại.
-
-
-### 2.2. Tải danh sách tác giả và sách
+### 2.1. Tải danh sách tác giả và sách
 - **Đại sảnh tác giả:** cần hiển thị mỗi tác giả cùng danh sách tác phẩm:
-  ![img_3.png](img_3.png)
+![img_14.png](img_14.png)
+
+```declarative
+List<Author> authors = authorRepository.findAll();
+
+for (Author author : authors) {
+    author.getBooks().size();
+}
+```
 
 
-| Luồng xử lý |  | SQL phát sinh |  | Kết quả |
-| --- | :---: | --- | :---: | --- |
-| Tải danh sách Authors<br>↓<br>Duyệt qua từng Author<br>↓<br>Truy vấn Books tương ứng | ➜ | 1 query tải toàn bộ Authors<br>↓<br>1 query tải Books cho mỗi Author | ➜ | **1 + 500 = 501 Tổng số câu SQL thực tế được gửi đến database** |
+| Luồng xử lý                                                                         |  | SQL phát sinh |  | Kết quả |
+|-------------------------------------------------------------------------------------| :---: | --- | :---: | --- |
+| Tải danh sách Authors<br>↓<br>Duyệt qua từng Author<br>↓<br> Lấy thông tin số Books | ➜ | 1 query tải toàn bộ Authors<br>↓<br>1 query tải Books cho mỗi Author | ➜ | **1 + 500 = 501 Tổng số câu SQL thực tế được gửi đến database** |
 
 #### Kết quả
 
@@ -132,13 +124,48 @@ Một cách triển khai đơn giản:
 
 Số rows = 500 rows Author + 10.000 rows Book.
 
+### 2.2. Tải danh sách tác giả và quốc gia
+![img_15.png](img_15.png)
+
+```declarative
+List<Author> authors = authorRepository.findAll();
+
+for (Author author : authors) {
+    author.getCountry().getName();
+}
+```
+| Luồng xử lý                                                                                                  |  | SQL phát sinh |  | Kết quả |
+|--------------------------------------------------------------------------------------------------------------| :---: | --- | :---: | --- |
+| Tải danh sách Authors<br><br>↓<br><br>Duyệt qua từng Author<br><br>↓<br><br>Lấy thông tin Country của Author | ➜ | 1 query tải toàn bộ Authors<br><br>+<br><br>1 query cho mỗi Country chưa được tải | ➜ | 500 Authors tham chiếu 50 Countries<br><br>**1 + 50 = 51 Tổng số câu SQL thực tế được gửi đến database** |
+### Kết quả
+
+| Metric               | Value |
+| -------------------- |------:|
+| Số query chính được gọi qua Hibernate          |   `1` |
+| Tổng số câu SQL thực tế được gửi đến database       |  `51` |
+| Estimated rows | `550` |
+
+> Mặc dù có 500 Authors, hệ thống chỉ có 50 Countries khác nhau. Sau khi một Country được tải, Hibernate có thể tái sử dụng entity đó trong Persistence Context hiện tại.
+
+
+
+
 ### 2.3. Tải danh sách tác giả và sách và giải thưởng
 - **Đại sảnh tác giả:** cần hiển thị mỗi tác giả cùng danh sách tác phẩm và giải thưởng:
-- ![img_2.png](img_2.png)
+![img_16.png](img_16.png)
 
-| Luồng xử lý                                                                                                            |  | SQL phát sinh                                                                                                   |  | Kết quả                                  |
-|------------------------------------------------------------------------------------------------------------------------| :---: |-----------------------------------------------------------------------------------------------------------------| :---: |------------------------------------------|
-| Tải danh sách Authors<br>↓<br>Duyệt qua từng Author<br>↓<br>Truy vấn Books tương ứng<br>↓<br>Truy vấn Awards tương ứng | ➜ | 1 query tải toàn bộ Authors<br>↓<br>1 query tải Books cho mỗi Authors<br>↓<br>1 query tải Awards cho mỗi Author | ➜ | **1 + 500 + 500 = 1.001 Tổng số câu SQL thực tế được gửi đến database** |
+```declarative
+List<Author> authors = authorRepository.findAll();
+
+for (Author author : authors) {
+    author.getBooks().size();
+    author.getAwards().size();
+}
+```
+
+| Luồng xử lý                                                                                                      |  | SQL phát sinh                                                                                                   |  | Kết quả                                  |
+|------------------------------------------------------------------------------------------------------------------| :---: |-----------------------------------------------------------------------------------------------------------------| :---: |------------------------------------------|
+| Tải danh sách Authors<br>↓<br>Duyệt qua từng Author<br>↓<br> Lấy thông tin Books <br>↓<br> Lấy thông tin Awards  | ➜ | 1 query tải toàn bộ Authors<br>↓<br>1 query tải Books cho mỗi Authors<br>↓<br>1 query tải Awards cho mỗi Author | ➜ | **1 + 500 + 500 = 1.001 Tổng số câu SQL thực tế được gửi đến database** |
 #### Kết quả
 
 | Metric         |    Value |
@@ -303,7 +330,6 @@ JOIN FETCH có thể chạy được. Tuy nhiên, kết quả trả về vẫn c
 ### 4.2. JOIN FETCH nhiều Collections: Cartesian product
 
 Repository fetch đồng thời Books và Awards:
-- ![img_2.png](img_2.png)
 ```java
 @Query("""
     select distinct a

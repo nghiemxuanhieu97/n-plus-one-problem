@@ -137,7 +137,7 @@ public class AuthorController {
                     The mapper intentionally accesses author.getBooks().
 
                     Result DTO:
-                    AuthorBooksDto with Author id, Author name, and the nested Books collection.
+                    AuthorBooksDto with Author id, Author name, and noBooks.
 
                     Expected behavior:
                     The response data is correct, but Hibernate executes one query for Authors and up to one additional Books query for each Author.
@@ -155,7 +155,7 @@ public class AuthorController {
 
     @Tag(name = "01 - Basic Loading and N+1 Problem")
     @Operation(
-            summary = "Paginate Authors and lazily access Books (N+1)",
+            summary = "Pagination Authors and lazily access Books (N+1)",
             description = """
                     Goal:
                     Show that pagination reduces the number of Authors loaded but does not remove N+1 behavior when a lazy collection is accessed.
@@ -177,7 +177,7 @@ public class AuthorController {
                     The mapper intentionally accesses author.getBooks().
 
                     Result DTO:
-                    AuthorBooksDto with Author id, Author name, and the nested Books collection.
+                    AuthorBooksDto with Author id, Author name, and noBooks.
 
                     Expected behavior:
                     Hibernate executes one query for the requested Author page, one count query for pagination metadata, and up to one Books query for each Author in the page.
@@ -263,7 +263,7 @@ public class AuthorController {
                     The mapper intentionally accesses both lazy collections.
 
                     Result DTO:
-                    AuthorBooksAwardsDto with Author id, Author name, Books, and Awards.
+                    AuthorBooksAwardsDto with Author id, Author name, noBooks, and noAwards.
 
                     Expected behavior:
                     The response data is correct, but Hibernate executes one Author query plus Books queries and Awards queries.
@@ -287,11 +287,11 @@ public class AuthorController {
                     Demonstrate how JOIN FETCH removes the lazy Books N+1 problem by loading Authors and Books in one query.
 
                     Use case:
-                    An administration page displays Authors and all Books written by each Author.
-                    Books must remain nested under the correct Author.
+                    An administration page displays Authors and the number of Books written by each Author.
+                    The count must be calculated from the correct Author's Books.
 
                     Why this API matches the scenario:
-                    The response needs the Books collection for every loaded Author.
+                    The response needs noBooks for every loaded Author.
                     The query explicitly fetches Author.books instead of allowing one lazy Books query per Author.
 
                     Repository query:
@@ -305,7 +305,7 @@ public class AuthorController {
                     then maps them to AuthorBooksDto.
 
                     Result DTO:
-                    AuthorBooksDto with Author id, Author name, and the nested Books collection.
+                    AuthorBooksDto with Author id, Author name, and noBooks.
 
                     Expected behavior:
                     Hibernate executes one SQL statement instead of approximately 501 statements.
@@ -350,8 +350,8 @@ public class AuthorController {
                     then maps them to AuthorBooksAwardsDto.
 
                     Result DTO:
-                    AuthorBooksAwardsDto with Author id, Author name, Books, and Awards.
-                    The final nested result can be correct even though the SQL result contains many repeated combinations.
+                    AuthorBooksAwardsDto with Author id, Author name, noBooks, and noAwards.
+                    The final count result can be correct even though the SQL result contains many repeated combinations.
 
                     Expected behavior:
                     The query executes as one SQL statement, but it produces approximately one row per Author-Book-Award combination.
@@ -464,11 +464,11 @@ public class AuthorController {
                     Demonstrate why Pageable should not be applied directly to a collection JOIN FETCH.
 
                     Use case:
-                    An administration page requests one page of Authors together with the complete Books collection of each Author.
+                    An administration page requests one page of Authors together with each Author's noBooks value.
 
                     Why this API matches the scenario:
                     Joining Books creates multiple SQL rows for each Author.
-                    Applying LIMIT and OFFSET to those joined rows could split one Author's Books collection, so Hibernate cannot safely paginate the SQL result by root Author.
+                    Applying LIMIT and OFFSET to those joined rows could split one Author's Books data, so Hibernate cannot safely paginate the SQL result by root Author.
 
                     Repository query:
                     select distinct a
@@ -481,7 +481,7 @@ public class AuthorController {
                     then maps the returned Authors to AuthorBooksDto.
 
                     Result DTO:
-                    AuthorBooksDto with Author id, Author name, and the complete Books collection.
+                    AuthorBooksDto with Author id, Author name, and noBooks.
 
                     Expected behavior:
                     With hibernate.query.fail_on_pagination_over_collection_fetch=false, Hibernate loads the complete Author-Book joined result, rebuilds and de-duplicates Authors, and applies pagination in JVM memory.
@@ -500,57 +500,57 @@ public class AuthorController {
     ) {
         return authorService.demoPaginationBooksBad(page, size);
     }
-//
-//    @Tag(name = "03 - JOIN FETCH with Pagination")
-//    @Operation(
-//            summary = "Safely paginate Authors with Books in two steps",
-//            description = """
-//                    Goal:
-//                    Demonstrate the recommended two-step pattern for paginating Authors with a collection.
-//
-//                    Use case:
-//                    An administration page needs one correct page of Authors together with the complete Books collection of each Author.
-//
-//                    Why this API matches the scenario:
-//                    The first query paginates root Author ids, where one row represents one Author.
-//                    The second query fetches Books only for the selected Author ids.
-//                    This keeps the page correct and bounds the joined data to the requested Authors.
-//
-//                    Step 1 query:
-//                    select a.id
-//                    from Author a
-//                    order by a.id
-//
-//                    Step 2 query:
-//                    select distinct a
-//                    from Author a
-//                    join fetch a.books
-//                    where a.id in :ids
-//                    order by a.id
-//
-//                    Service flow:
-//                    AuthorService.demoSafePagination() pages Author ids first,
-//                    fetches Authors and Books for those ids, and maps them to AuthorBooksDto.
-//
-//                    Result DTO:
-//                    AuthorBooksDto with Author id, Author name, and the complete Books collection.
-//
-//                    Expected behavior:
-//                    The page contains the requested Authors without splitting or omitting their Books.
-//                    For size=10 and 20 Books per Author, the collection-fetch query processes approximately 200 joined Author-Book rows instead of all 10,000 rows.
-//
-//                    Lesson:
-//                    Paginate root ids first, then fetch the collection for only those ids.
-//                    """,
-//            responses = @ApiResponse(responseCode = "200", description = "Two-step pagination metrics")
-//    )
-//    @GetMapping("/pagination/two-step/book")
-//    public Response<List<AuthorBooksDto>> demoSafePagination(
-//            @RequestParam(defaultValue = "0") int page,
-//            @RequestParam(defaultValue = "10") int size
-//    ) {
-//        return authorService.demoSafePagination(page, size);
-//    }
+
+    @Tag(name = "03 - JOIN FETCH with Pagination")
+    @Operation(
+            summary = "Safely paginate Authors with Books in two steps",
+            description = """
+                    Goal:
+                    Demonstrate the recommended two-step pattern for paginating Authors with a collection.
+
+                    Use case:
+                    An administration page needs one correct page of Authors together with each Author's noBooks value.
+
+                    Why this API matches the scenario:
+                    The first query paginates root Author ids, where one row represents one Author.
+                    The second query fetches Books only for the selected Author ids.
+                    This keeps the page correct and bounds the joined data to the requested Authors.
+
+                    Step 1 query:
+                    select a.id
+                    from Author a
+                    order by a.id
+
+                    Step 2 query:
+                    select distinct a
+                    from Author a
+                    join fetch a.books
+                    where a.id in :ids
+                    order by a.id
+
+                    Service flow:
+                    AuthorService.demoSafePagination() pages Author ids first,
+                    fetches Authors and Books for those ids, and maps them to AuthorBooksDto.
+
+                    Result DTO:
+                    AuthorBooksDto with Author id, Author name, and noBooks.
+
+                    Expected behavior:
+                    The page contains the requested Authors without splitting or omitting the Books used for noBooks.
+                    For size=10 and 20 Books per Author, the collection-fetch query processes approximately 200 joined Author-Book rows instead of all 10,000 rows.
+
+                    Lesson:
+                    Paginate root ids first, then fetch the collection for only those ids.
+                    """,
+            responses = @ApiResponse(responseCode = "200", description = "Two-step pagination metrics")
+    )
+    @GetMapping("/two-step/pagination/book")
+    public Response<List<AuthorBooksDto>> demoSafePagination(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size
+    ) {
+        return authorService.demoSafePagination(page, size);
+    }
 
     @Tag(name = "03 - JOIN FETCH with Pagination")
     @Operation(
@@ -560,7 +560,7 @@ public class AuthorController {
                     Demonstrate why manually adding LIMIT and OFFSET to an Author-Book join does not create a correct Author page.
 
                     Use case:
-                    An administration page needs a page of Authors together with the complete Books collection of each Author.
+                    An administration page needs a page of Authors together with each Author's noBooks value.
                     The implementation tries to force database pagination over the joined rows.
 
                     Why this API matches the scenario:
@@ -581,7 +581,7 @@ public class AuthorController {
 
                     Result DTO:
                     The SQL branch returns AuthorBooksDto objects, but the list is intentionally an incorrect Author page.
-                    The result may repeat the same Author id several times even though each DTO can show that Author's full Books collection.
+                    The result may repeat the same Author id several times even though each DTO can show that Author's noBooks value.
 
                     Expected behavior:
                     The SQL branch demonstrates an incorrect result because pagination is applied to joined rows instead of root Authors.
@@ -589,7 +589,6 @@ public class AuthorController {
 
                     Lesson:
                     Returning the requested number of SQL rows is not the same as returning the requested number of complete Authors.
-                    Use /demo/author/pagination/two-step/book for a bounded and correct Author page with Books.
                     """,
             responses = @ApiResponse(responseCode = "200", description = "Manual pagination demo; SQL can return incorrect Author page, JPQL currently throws UnknownParameterException")
     )
